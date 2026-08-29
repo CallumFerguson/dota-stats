@@ -2,8 +2,21 @@
 
 This TypeScript server uses Valve's recent match history to find an approximate
 current match sequence number. It then requests pages of up to 100 newer
-matches, advances its sequence cursor, and saves every response as a new
-timestamped JSON file in `data`.
+matches, advances its sequence cursor, and stores the matches in PostgreSQL.
+
+Before the HTTP server starts or any Valve request is made, the app validates
+its PostgreSQL connection settings and connects to the database. A missing or
+empty setting, an invalid port, or a failed connection stops startup. It then
+creates the `matches` and `match_players` tables and supporting index when they
+do not already exist. Schema creation uses plain SQL in `src/database-schema.ts`;
+there is no migration framework.
+
+Each fetched page is stored in one database transaction. Existing match and
+player primary keys are ignored, which makes overlapping fetches safe. The
+large `picks_bans` and `ability_upgrades` arrays are intentionally discarded.
+Item identifiers use PostgreSQL `INTEGER` columns because Valve can return IDs
+above the signed `SMALLINT` limit. Existing schemas are not altered
+automatically; schema changes are handled manually.
 
 Every Valve request uses the next API key from a round-robin rotation. At least
 two unique keys are required, retries rotate keys too, and duplicate keys are
@@ -25,19 +38,35 @@ full-page streak. Steady-state polling never skips matches or performs an
 immediate catch-up burst.
 
 The console emits one summary line per successful fetch containing its match
-count, saved JSON path, polling adjustment, and any behind/caught-up transition.
-Empty successful responses are also saved. Failed requests use exponential
-backoff beginning at six seconds, and a Valve `Retry-After` response is
-honored when it requires a longer wait.
+count, polling adjustment, and any behind/caught-up transition. Failed requests
+use exponential backoff beginning at six seconds, and a Valve `Retry-After`
+response is honored when it requires a longer wait.
+
+Valve fetching and PostgreSQL storage have separate failure handling. A
+transient storage failure retries the already-fetched page without making
+another Valve request. Non-retryable data or schema errors include available
+PostgreSQL error metadata in the log and shut down the server instead of
+retrying forever. The status endpoint exposes the latest failure as
+`lastError`.
 
 ## Run it
 
-1. Put at least two unique Valve Web API keys in `.env` as a comma-separated
-   list:
+1. Put at least two unique Valve Web API keys and the required PostgreSQL
+   connection settings in `.env`:
 
    ```env
    STEAM_API_KEYS=your_first_api_key,your_second_api_key
+
+   # postgres database connection info
+   PGHOST=localhost
+   PGPORT=5432
+   PGDATABASE=your_database_name
+   PGUSER=postgres
+   PGPASSWORD=your_database_password
    ```
+
+   All five PostgreSQL variables must be present and non-empty. `PGPORT` must
+   be an integer from 1 through 65535.
 
 2. Install dependencies and start the server:
 

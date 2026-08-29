@@ -1,8 +1,10 @@
 import dotenv from "dotenv";
-import { mkdir, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { Client, type ClientConfig } from "pg";
+import { createDatabaseSchema } from "./database-schema.js";
+import { storeMatches, type DotaMatch } from "./match-storage.js";
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectDirectory = path.resolve(sourceDirectory, "..");
@@ -18,30 +20,27 @@ const MAX_POLL_INTERVAL_MS = 6_000;
 const FULL_PAGES_PER_DELAY_REDUCTION = 5;
 const INITIAL_BACKOFF_MS = 6_000;
 const MAX_BACKOFF_MS = 60_000;
+const DATABASE_CONNECTION_TIMEOUT_MS = 10_000;
 const MATCH_HISTORY_ENDPOINT =
   "https://api.steampowered.com/IDOTA2Match_570/GetMatchHistory/v1/";
 const MATCH_SEQUENCE_ENDPOINT =
   "https://api.steampowered.com/IDOTA2Match_570/GetMatchHistoryBySequenceNum/v1/";
 
-interface MatchWithSequenceNumber {
-  match_seq_num?: number;
-}
-
 interface MatchApiResponse {
   result?: {
-    matches?: MatchWithSequenceNumber[];
+    matches?: DotaMatch[];
   };
 }
 
-type PollingPhase = "starting" | "catching-up" | "caught-up";
+type PollingPhase = "starting" | "catching-up" | "caught-up" | "failed";
 
 interface PollingStatus {
   apiKeyCount: number;
   consecutiveFailures: number;
   consecutiveFullPages: number;
   isBehind: boolean;
+  lastError: string | null;
   latestMatchCount: number | null;
-  latestOutputPath: string | null;
   nextPollDelayMs: number;
   nextSequenceNumber: number | null;
   phase: PollingPhase;
@@ -52,8 +51,8 @@ const pollingStatus: PollingStatus = {
   consecutiveFailures: 0,
   consecutiveFullPages: 0,
   isBehind: false,
+  lastError: null,
   latestMatchCount: null,
-  latestOutputPath: null,
   nextPollDelayMs: INITIAL_POLL_INTERVAL_MS,
   nextSequenceNumber: null,
   phase: "starting",
@@ -123,6 +122,53 @@ function parseApiKeys(value: string | undefined): string[] {
   return uniqueApiKeys;
 }
 
+function requireEnvironmentVariable(name: string): string {
+  const value = process.env[name];
+
+  if (value === undefined || value.length === 0) {
+    throw new Error(`${name} must be set and cannot be empty.`);
+  }
+
+  return value;
+}
+
+function getDatabaseConfig(): ClientConfig {
+  const portValue = requireEnvironmentVariable("PGPORT");
+  const port = Number(portValue);
+
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error("PGPORT must be an integer between 1 and 65535.");
+  }
+
+  return {
+    host: requireEnvironmentVariable("PGHOST"),
+    port,
+    database: requireEnvironmentVariable("PGDATABASE"),
+    user: requireEnvironmentVariable("PGUSER"),
+    password: requireEnvironmentVariable("PGPASSWORD"),
+    connectionTimeoutMillis: DATABASE_CONNECTION_TIMEOUT_MS,
+  };
+}
+
+async function connectToDatabase(): Promise<Client> {
+  const config = getDatabaseConfig();
+  const database = new Client(config);
+
+  try {
+    await database.connect();
+  } catch (error: unknown) {
+    throw new Error(
+      `Could not connect to PostgreSQL: ${getErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
+
+  console.log(
+    `Connected to PostgreSQL at ${config.host}:${config.port}/${config.database}.`,
+  );
+  return database;
+}
+
 function parseRetryAfter(retryAfter: string | null): number | null {
   if (retryAfter === null) {
     return null;
@@ -169,7 +215,7 @@ async function fetchJson(
   return (await response.json()) as MatchApiResponse;
 }
 
-function getMatches(matchData: MatchApiResponse): MatchWithSequenceNumber[] {
+function getMatches(matchData: MatchApiResponse): DotaMatch[] {
   const matches = matchData.result?.matches;
 
   if (!Array.isArray(matches)) {
@@ -181,6 +227,57 @@ function getMatches(matchData: MatchApiResponse): MatchWithSequenceNumber[] {
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function getErrorStringProperty(
+  error: unknown,
+  propertyName: string,
+): string | null {
+  if (typeof error !== "object" || error === null) {
+    return null;
+  }
+
+  const value = (error as Record<string, unknown>)[propertyName];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function formatError(error: unknown): string {
+  if (error instanceof AggregateError) {
+    const nestedErrors = [...error.errors]
+      .map((nestedError) => formatError(nestedError))
+      .join(" | ");
+    return `${error.message}: ${nestedErrors}`;
+  }
+
+  const details = [
+    ["code", getErrorStringProperty(error, "code")],
+    ["table", getErrorStringProperty(error, "table")],
+    ["column", getErrorStringProperty(error, "column")],
+    ["constraint", getErrorStringProperty(error, "constraint")],
+    ["detail", getErrorStringProperty(error, "detail")],
+    ["hint", getErrorStringProperty(error, "hint")],
+  ]
+    .filter((detail): detail is [string, string] => detail[1] !== null)
+    .map(([label, value]) => `${label}=${value}`);
+  const detailSuffix = details.length > 0 ? ` (${details.join(", ")})` : "";
+  const cause =
+    error instanceof Error && "cause" in error ? error.cause : undefined;
+  const causeSuffix =
+    cause === undefined || cause === error
+      ? ""
+      : `; caused by: ${formatError(cause)}`;
+
+  return `${getErrorMessage(error)}${detailSuffix}${causeSuffix}`;
+}
+
+function isRetryableDatabaseError(error: unknown): boolean {
+  const code = getErrorStringProperty(error, "code");
+
+  if (code === null) {
+    return false;
+  }
+
+  return ["40001", "40P01", "55P03"].includes(code);
 }
 
 function getRetryDelay(error: unknown, failureCount: number): number {
@@ -198,6 +295,11 @@ function getRetryDelay(error: unknown, failureCount: number): number {
 async function retryWithBackoff<T>(
   description: string,
   operation: () => Promise<T>,
+  options: {
+    formatFailure?: (error: unknown) => string;
+    retryNote?: string;
+    shouldRetry?: (error: unknown) => boolean;
+  } = {},
 ): Promise<T> {
   let failureCount = 0;
 
@@ -205,10 +307,19 @@ async function retryWithBackoff<T>(
     try {
       const result = await operation();
       pollingStatus.consecutiveFailures = 0;
+      pollingStatus.lastError = null;
       return result;
     } catch (error: unknown) {
+      const formattedFailure = (options.formatFailure ?? getErrorMessage)(error);
+
+      if (options.shouldRetry !== undefined && !options.shouldRetry(error)) {
+        pollingStatus.lastError = `${description}: ${formattedFailure}`;
+        throw error;
+      }
+
       failureCount += 1;
       pollingStatus.consecutiveFailures = failureCount;
+      pollingStatus.lastError = `${description}: ${formattedFailure}`;
       const retryDelay = getRetryDelay(error, failureCount);
       pollingStatus.nextPollDelayMs = retryDelay;
       const retryAfterWasUsed =
@@ -220,7 +331,7 @@ async function retryWithBackoff<T>(
         : " (exponential backoff)";
 
       console.error(
-        `${description} failed: ${getErrorMessage(error)}. Retrying in ${(retryDelay / 1_000).toFixed(1)} seconds${retryReason}.`,
+        `${description} failed: ${formattedFailure}. Retrying in ${(retryDelay / 1_000).toFixed(1)} seconds${retryReason}.${options.retryNote === undefined ? "" : ` ${options.retryNote}`}`,
       );
       await delay(retryDelay);
     }
@@ -258,10 +369,16 @@ async function fetchApproximateLatestSequenceNumber(
   return sequenceNumber;
 }
 
-async function fetchAndSaveMatches(
+interface FetchedMatchPage {
+  matchCount: number;
+  matches: DotaMatch[];
+  nextSequenceNumber: number;
+}
+
+async function fetchMatchPage(
   apiKeys: ApiKeyRotator,
   startSequenceNumber: number,
-): Promise<{ matchCount: number; nextSequenceNumber: number; outputPath: string }> {
+): Promise<FetchedMatchPage> {
   const requestUrl = new URL(MATCH_SEQUENCE_ENDPOINT);
   requestUrl.searchParams.set(
     "start_at_match_seq_num",
@@ -283,17 +400,35 @@ async function fetchAndSaveMatches(
     highestReturnedSequenceNumber === null
       ? startSequenceNumber
       : highestReturnedSequenceNumber + 1;
-  const dataDirectory = path.join(projectDirectory, "data");
-  const timestamp = new Date().toISOString().replaceAll(":", "-");
-  const outputPath = path.join(
-    dataDirectory,
-    `matches-seq-${startSequenceNumber}-${timestamp}.json`,
+
+  return { matchCount: matches.length, matches, nextSequenceNumber };
+}
+
+async function fetchAndStoreMatchPage(
+  database: Client,
+  apiKeys: ApiKeyRotator,
+  startSequenceNumber: number,
+  fetchDescription: string,
+): Promise<{ matchCount: number; nextSequenceNumber: number }> {
+  const page = await retryWithBackoff(fetchDescription, () =>
+    fetchMatchPage(apiKeys, startSequenceNumber),
   );
 
-  await mkdir(dataDirectory, { recursive: true });
-  await writeFile(outputPath, `${JSON.stringify(matchData, null, 2)}\n`, "utf8");
+  await retryWithBackoff(
+    `PostgreSQL storage for ${page.matchCount} matches starting at sequence ${startSequenceNumber}`,
+    () => storeMatches(database, page.matches),
+    {
+      formatFailure: formatError,
+      shouldRetry: isRetryableDatabaseError,
+      retryNote:
+        "The fetched page is retained in memory; no additional Valve request will be made for this retry.",
+    },
+  );
 
-  return { matchCount: matches.length, nextSequenceNumber, outputPath };
+  return {
+    matchCount: page.matchCount,
+    nextSequenceNumber: page.nextSequenceNumber,
+  };
 }
 
 function delay(milliseconds: number): Promise<void> {
@@ -339,21 +474,18 @@ function recordFetchResult(
   result: {
     matchCount: number;
     nextSequenceNumber: number;
-    outputPath: string;
   },
 ): void {
   pollingStatus.latestMatchCount = result.matchCount;
-  pollingStatus.latestOutputPath = result.outputPath;
   pollingStatus.nextSequenceNumber = result.nextSequenceNumber;
 }
 
 function logFetchSummary(
-  result: { matchCount: number; outputPath: string },
+  result: { matchCount: number },
   detail: string,
   warning = false,
 ): void {
-  const relativeOutputPath = path.relative(projectDirectory, result.outputPath);
-  const message = `Fetched ${result.matchCount} matches; ${detail}; saved ${relativeOutputPath}.`;
+  const message = `Fetched and stored ${result.matchCount} matches; ${detail}.`;
 
   if (warning) {
     console.warn(message);
@@ -362,7 +494,10 @@ function logFetchSummary(
   }
 }
 
-async function pollForMatches(apiKeys: ApiKeyRotator): Promise<never> {
+async function pollForMatches(
+  database: Client,
+  apiKeys: ApiKeyRotator,
+): Promise<never> {
   let nextSequenceNumber = await retryWithBackoff(
     "Finding an approximate latest match sequence number",
     () => fetchApproximateLatestSequenceNumber(apiKeys),
@@ -372,8 +507,11 @@ async function pollForMatches(apiKeys: ApiKeyRotator): Promise<never> {
   console.log(`Approximate latest match sequence number: ${nextSequenceNumber}`);
 
   while (true) {
-    const result = await retryWithBackoff("Startup match fetch", () =>
-      fetchAndSaveMatches(apiKeys, nextSequenceNumber),
+    const result = await fetchAndStoreMatchPage(
+      database,
+      apiKeys,
+      nextSequenceNumber,
+      "Startup Valve match fetch",
     );
     nextSequenceNumber = result.nextSequenceNumber;
     recordFetchResult(result);
@@ -428,8 +566,11 @@ async function pollForMatches(apiKeys: ApiKeyRotator): Promise<never> {
     pollingStatus.nextPollDelayMs = waitBeforeNextFetch;
     await delay(waitBeforeNextFetch);
 
-    const result = await retryWithBackoff("Match fetch", () =>
-      fetchAndSaveMatches(apiKeys, nextSequenceNumber),
+    const result = await fetchAndStoreMatchPage(
+      database,
+      apiKeys,
+      nextSequenceNumber,
+      "Valve match fetch",
     );
     const fetchCompletedAt = Date.now();
     const elapsedSincePreviousFetch =
@@ -502,11 +643,24 @@ async function pollForMatches(apiKeys: ApiKeyRotator): Promise<never> {
   }
 }
 
-function startServer(): void {
+async function startServer(): Promise<void> {
   const apiKeys = new ApiKeyRotator(
     parseApiKeys(process.env.STEAM_API_KEYS),
   );
   pollingStatus.apiKeyCount = apiKeys.count;
+  const database = await connectToDatabase();
+
+  try {
+    await createDatabaseSchema(database);
+  } catch (error: unknown) {
+    await database.end().catch(() => undefined);
+    throw new Error(
+      `Could not create the PostgreSQL schema: ${formatError(error)}`,
+      { cause: error },
+    );
+  }
+
+  console.log("PostgreSQL schema is ready.");
 
   const server = createServer((_request, response) => {
     response.writeHead(200, { "Content-Type": "application/json" });
@@ -518,19 +672,60 @@ function startServer(): void {
     );
   });
 
+  let isStopping = false;
+  let databaseClosePromise: Promise<void> | null = null;
+  const closeDatabase = (): Promise<void> => {
+    databaseClosePromise ??= database.end().catch((error: unknown) => {
+      console.error(
+        `Failed to close the PostgreSQL connection: ${formatError(error)}`,
+      );
+    });
+    return databaseClosePromise;
+  };
+  const stopAfterFatalError = (
+    description: string,
+    error: unknown,
+  ): void => {
+    if (isStopping) {
+      return;
+    }
+
+    isStopping = true;
+    const formattedError = formatError(error);
+    pollingStatus.phase = "failed";
+    pollingStatus.lastError = `${description}: ${formattedError}`;
+    console.error(
+      `${description}: ${formattedError}. The server is shutting down because this error is not safely retryable.`,
+    );
+    process.exitCode = 1;
+
+    if (server.listening) {
+      server.close();
+    }
+
+    void closeDatabase();
+  };
+
+  server.on("close", () => void closeDatabase());
+  server.on("error", (error: Error) =>
+    stopAfterFatalError("HTTP server failure", error),
+  );
+  database.on("error", (error: Error) =>
+    stopAfterFatalError("PostgreSQL connection failure", error),
+  );
+
   server.listen(PORT, () => {
     console.log(
       `Dota data server listening on http://localhost:${PORT} with ${apiKeys.count} rotating API keys`,
     );
   });
 
-  void pollForMatches(apiKeys);
+  void pollForMatches(database, apiKeys).catch((error: unknown) =>
+    stopAfterFatalError("Match polling stopped", error),
+  );
 }
 
-try {
-  startServer();
-} catch (error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
-  console.error(`Failed to start Dota data server: ${message}`);
+startServer().catch((error: unknown) => {
+  console.error(`Failed to start Dota data server: ${formatError(error)}`);
   process.exitCode = 1;
-}
+});
