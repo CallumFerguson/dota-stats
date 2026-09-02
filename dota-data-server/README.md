@@ -14,9 +14,12 @@ there is no migration framework.
 Each fetched page is stored in one database transaction. Existing match and
 player primary keys are ignored, which makes overlapping fetches safe. The
 large `picks_bans` and `ability_upgrades` arrays are intentionally discarded.
-Item identifiers use PostgreSQL `INTEGER` columns because Valve can return IDs
-above the signed `SMALLINT` limit. Existing schemas are not altered
-automatically; schema changes are handled manually.
+All integer values supplied by Valve use PostgreSQL `BIGINT` columns. This is a
+deliberate schema-wide rule: Valve can return unusual values outside narrower
+integer ranges, including from custom or malformed matches, so fields are not
+sized from their expected gameplay values. Incoming values must still be safe
+JavaScript integers, which fit comfortably inside `BIGINT`. Existing schemas
+are not altered automatically; schema changes are handled manually.
 
 Every Valve request uses the next API key from a round-robin rotation. At least
 two unique keys are required, retries rotate keys too, and duplicate keys are

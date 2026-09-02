@@ -94,7 +94,7 @@ SELECT
   radiant_win,
   duration,
   pre_game_duration,
-  TO_TIMESTAMP(start_time),
+  TO_TIMESTAMP(start_time::DOUBLE PRECISION),
   tower_status_radiant,
   tower_status_dire,
   barracks_status_radiant,
@@ -113,23 +113,23 @@ FROM JSONB_TO_RECORDSET($1::JSONB) AS payload (
   match_id BIGINT,
   match_seq_num BIGINT,
   radiant_win BOOLEAN,
-  duration INTEGER,
-  pre_game_duration SMALLINT,
-  start_time DOUBLE PRECISION,
-  tower_status_radiant SMALLINT,
-  tower_status_dire SMALLINT,
-  barracks_status_radiant SMALLINT,
-  barracks_status_dire SMALLINT,
-  cluster SMALLINT,
-  first_blood_time INTEGER,
-  lobby_type SMALLINT,
-  human_players SMALLINT,
-  league_id INTEGER,
-  game_mode SMALLINT,
-  flags INTEGER,
-  engine SMALLINT,
-  radiant_score SMALLINT,
-  dire_score SMALLINT
+  duration BIGINT,
+  pre_game_duration BIGINT,
+  start_time BIGINT,
+  tower_status_radiant BIGINT,
+  tower_status_dire BIGINT,
+  barracks_status_radiant BIGINT,
+  barracks_status_dire BIGINT,
+  cluster BIGINT,
+  first_blood_time BIGINT,
+  lobby_type BIGINT,
+  human_players BIGINT,
+  league_id BIGINT,
+  game_mode BIGINT,
+  flags BIGINT,
+  engine BIGINT,
+  radiant_score BIGINT,
+  dire_score BIGINT
 )
 ON CONFLICT DO NOTHING;
 `;
@@ -179,44 +179,44 @@ INSERT INTO match_players (
 SELECT *
 FROM JSONB_TO_RECORDSET($1::JSONB) AS payload (
   match_id BIGINT,
-  player_slot SMALLINT,
+  player_slot BIGINT,
   account_id BIGINT,
-  team_number SMALLINT,
-  team_slot SMALLINT,
-  hero_id SMALLINT,
-  hero_variant SMALLINT,
-  item_0 INTEGER,
-  item_1 INTEGER,
-  item_2 INTEGER,
-  item_3 INTEGER,
-  item_4 INTEGER,
-  item_5 INTEGER,
-  backpack_0 INTEGER,
-  backpack_1 INTEGER,
-  backpack_2 INTEGER,
-  item_neutral INTEGER,
-  item_neutral2 INTEGER,
-  kills SMALLINT,
-  deaths SMALLINT,
-  assists SMALLINT,
-  leaver_status SMALLINT,
-  last_hits INTEGER,
-  denies SMALLINT,
-  gold_per_min SMALLINT,
-  xp_per_min SMALLINT,
-  level SMALLINT,
-  net_worth INTEGER,
+  team_number BIGINT,
+  team_slot BIGINT,
+  hero_id BIGINT,
+  hero_variant BIGINT,
+  item_0 BIGINT,
+  item_1 BIGINT,
+  item_2 BIGINT,
+  item_3 BIGINT,
+  item_4 BIGINT,
+  item_5 BIGINT,
+  backpack_0 BIGINT,
+  backpack_1 BIGINT,
+  backpack_2 BIGINT,
+  item_neutral BIGINT,
+  item_neutral2 BIGINT,
+  kills BIGINT,
+  deaths BIGINT,
+  assists BIGINT,
+  leaver_status BIGINT,
+  last_hits BIGINT,
+  denies BIGINT,
+  gold_per_min BIGINT,
+  xp_per_min BIGINT,
+  level BIGINT,
+  net_worth BIGINT,
   aghanims_scepter BOOLEAN,
   aghanims_shard BOOLEAN,
   moonshard BOOLEAN,
-  hero_damage INTEGER,
-  tower_damage INTEGER,
-  hero_healing INTEGER,
-  gold INTEGER,
-  gold_spent INTEGER,
-  scaled_hero_damage INTEGER,
-  scaled_tower_damage INTEGER,
-  scaled_hero_healing INTEGER
+  hero_damage BIGINT,
+  tower_damage BIGINT,
+  hero_healing BIGINT,
+  gold BIGINT,
+  gold_spent BIGINT,
+  scaled_hero_damage BIGINT,
+  scaled_tower_damage BIGINT,
+  scaled_hero_healing BIGINT
 )
 ON CONFLICT DO NOTHING;
 `;
@@ -233,18 +233,10 @@ function toOptionalBoolean(value: number | undefined): boolean | null {
   return value === undefined ? null : value !== 0;
 }
 
-const POSTGRES_SMALLINT_MIN = -32_768;
-const POSTGRES_SMALLINT_MAX = 32_767;
-const POSTGRES_INTEGER_MIN = -2_147_483_648;
-const POSTGRES_INTEGER_MAX = 2_147_483_647;
-
-function validateIntegerFields(
+function validateSafeIntegerFields(
   row: Record<string, unknown>,
   fieldNames: readonly string[],
   context: string,
-  typeName: string,
-  minimum: number,
-  maximum: number,
 ): void {
   for (const fieldName of fieldNames) {
     const value = row[fieldName];
@@ -253,58 +245,40 @@ function validateIntegerFields(
       continue;
     }
 
-    if (
-      typeof value !== "number" ||
-      !Number.isInteger(value) ||
-      value < minimum ||
-      value > maximum
-    ) {
+    if (typeof value !== "number" || !Number.isSafeInteger(value)) {
       throw new Error(
-        `Invalid ${fieldName}=${String(value)} for ${context}: PostgreSQL ${typeName} requires an integer from ${minimum} through ${maximum}.`,
+        `Invalid ${fieldName}=${String(value)} for ${context}: Valve integer fields must be JavaScript safe integers before storage as PostgreSQL BIGINT.`,
       );
     }
   }
 }
 
-const MATCH_SMALLINT_FIELDS = [
+const MATCH_INTEGER_FIELDS = [
+  "duration",
   "pre_game_duration",
+  "start_time",
   "tower_status_radiant",
   "tower_status_dire",
   "barracks_status_radiant",
   "barracks_status_dire",
   "cluster",
+  "first_blood_time",
   "lobby_type",
   "human_players",
+  "league_id",
   "game_mode",
+  "flags",
   "engine",
   "radiant_score",
   "dire_score",
 ] as const;
 
-const PLAYER_SMALLINT_FIELDS = [
-  "player_slot",
+const PLAYER_INTEGER_FIELDS = [
+  "account_id",
   "team_number",
   "team_slot",
   "hero_id",
   "hero_variant",
-  "kills",
-  "deaths",
-  "assists",
-  "leaver_status",
-  "denies",
-  "gold_per_min",
-  "xp_per_min",
-  "level",
-] as const;
-
-const MATCH_INTEGER_FIELDS = [
-  "duration",
-  "first_blood_time",
-  "league_id",
-  "flags",
-] as const;
-
-const PLAYER_INTEGER_FIELDS = [
   "item_0",
   "item_1",
   "item_2",
@@ -316,7 +290,15 @@ const PLAYER_INTEGER_FIELDS = [
   "backpack_2",
   "item_neutral",
   "item_neutral2",
+  "kills",
+  "deaths",
+  "assists",
+  "leaver_status",
   "last_hits",
+  "denies",
+  "gold_per_min",
+  "xp_per_min",
+  "level",
   "net_worth",
   "hero_damage",
   "tower_damage",
@@ -406,43 +388,13 @@ export async function storeMatches(
 
   for (const matchRow of matchRows) {
     const context = `match ${matchRow.match_id}`;
-    validateIntegerFields(
-      matchRow,
-      MATCH_SMALLINT_FIELDS,
-      context,
-      "SMALLINT",
-      POSTGRES_SMALLINT_MIN,
-      POSTGRES_SMALLINT_MAX,
-    );
-    validateIntegerFields(
-      matchRow,
-      MATCH_INTEGER_FIELDS,
-      context,
-      "INTEGER",
-      POSTGRES_INTEGER_MIN,
-      POSTGRES_INTEGER_MAX,
-    );
+    validateSafeIntegerFields(matchRow, MATCH_INTEGER_FIELDS, context);
   }
 
   for (const playerRow of playerRows) {
     const context =
       `match ${playerRow.match_id}, player slot ${playerRow.player_slot}`;
-    validateIntegerFields(
-      playerRow,
-      PLAYER_SMALLINT_FIELDS,
-      context,
-      "SMALLINT",
-      POSTGRES_SMALLINT_MIN,
-      POSTGRES_SMALLINT_MAX,
-    );
-    validateIntegerFields(
-      playerRow,
-      PLAYER_INTEGER_FIELDS,
-      context,
-      "INTEGER",
-      POSTGRES_INTEGER_MIN,
-      POSTGRES_INTEGER_MAX,
-    );
+    validateSafeIntegerFields(playerRow, PLAYER_INTEGER_FIELDS, context);
   }
 
   await database.query("BEGIN");

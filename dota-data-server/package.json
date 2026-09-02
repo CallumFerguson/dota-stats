@@ -8,7 +8,7 @@
     "start": "tsx src/server.ts",
     "build": "tsc",
     "start:compiled": "node dist/server.js",
-    "test": "tsx --test test/rate-limit-tracker.test.ts"
+    "test": "tsx --test test/match-storage.test.ts test/rate-limit-tracker.test.ts"
   },
   "dependencies": {
     "dotenv": "^17.2.2",
