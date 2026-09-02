@@ -1,14 +1,7 @@
 import { type FormEvent, type KeyboardEvent, useState } from "react";
 
-const DEFAULT_QUERY = `SELECT
-  match_id,
-  start_time,
-  radiant_win,
-  radiant_score,
-  dire_score
-FROM matches
-ORDER BY start_time DESC
-LIMIT 25;`;
+const DEFAULT_QUESTION =
+  "Show the 25 most recent matches, including when each started, who won, and the final score.";
 
 interface QueryColumn {
   dataTypeId: number;
@@ -65,15 +58,15 @@ function formatCell(value: unknown): string {
 }
 
 function App() {
-  const [query, setQuery] = useState(DEFAULT_QUERY);
+  const [question, setQuestion] = useState(DEFAULT_QUESTION);
   const [result, setResult] = useState<QueryResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
 
-  async function runQuery(event?: FormEvent): Promise<void> {
+  async function askQuestion(event?: FormEvent): Promise<void> {
     event?.preventDefault();
 
-    if (isRunning || query.trim().length === 0) {
+    if (isRunning || question.trim().length === 0) {
       return;
     }
 
@@ -84,7 +77,7 @@ function App() {
       const response = await fetch("/api/query", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({ question }),
       });
       const responseText = await response.text();
       let payload: unknown;
@@ -95,13 +88,14 @@ function App() {
         throw new Error(
           response.ok
             ? "Query server returned an invalid response."
-            : `Query failed with HTTP ${response.status}. Is the query server running?`,
+            : `Request failed with HTTP ${response.status}. Is the query server running?`,
         );
       }
 
       if (!response.ok) {
         throw new Error(
-          getResponseError(payload) ?? `Query failed with HTTP ${response.status}.`,
+          getResponseError(payload) ??
+            `Request failed with HTTP ${response.status}.`,
         );
       }
 
@@ -119,7 +113,9 @@ function App() {
     }
   }
 
-  function handleEditorKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
+  function handleQuestionKeyDown(
+    event: KeyboardEvent<HTMLTextAreaElement>,
+  ): void {
     if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
       event.preventDefault();
       event.currentTarget.form?.requestSubmit();
@@ -131,30 +127,35 @@ function App() {
       <header className="page-header">
         <div>
           <p className="eyebrow">Dota Stats</p>
-          <h1>SQL console</h1>
+          <h1>Ask the match data</h1>
         </div>
         <p className="read-only-badge">Read-only</p>
       </header>
 
-      <form className="query-panel" onSubmit={(event) => void runQuery(event)}>
-        <label htmlFor="sql-query">PostgreSQL query</label>
+      <form
+        className="query-panel"
+        onSubmit={(event) => void askQuestion(event)}
+      >
+        <label htmlFor="match-question">What would you like to know?</label>
+        <p className="query-help">
+          Ask in plain language. Only questions that read existing match data
+          are allowed.
+        </p>
         <textarea
-          id="sql-query"
-          name="query"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          onKeyDown={handleEditorKeyDown}
-          spellCheck={false}
-          autoCapitalize="off"
-          autoCorrect="off"
+          id="match-question"
+          name="question"
+          value={question}
+          onChange={(event) => setQuestion(event.target.value)}
+          onKeyDown={handleQuestionKeyDown}
+          placeholder="For example: Which side has won more matches this week?"
         />
         <div className="query-actions">
           <span>Ctrl/⌘ + Enter to run</span>
           <button
             type="submit"
-            disabled={isRunning || query.trim().length === 0}
+            disabled={isRunning || question.trim().length === 0}
           >
-            {isRunning ? "Running…" : "Run query"}
+            {isRunning ? "Finding answer…" : "Ask question"}
           </button>
         </div>
       </form>
@@ -164,7 +165,7 @@ function App() {
           <h2>Results</h2>
           <p role="status">
             {isRunning
-              ? "Running query…"
+              ? "Generating and running a read-only query…"
               : result !== null && !error
                 ? `${result.rowCount.toLocaleString()} rows · ${result.durationMs.toLocaleString()} ms${result.truncated ? " · limited to 1,000 rows" : ""}`
                 : ""}
@@ -173,12 +174,12 @@ function App() {
 
         {error ? (
           <div className="message error-message" role="alert">
-            <strong>Query failed</strong>
+            <strong>Couldn’t answer that</strong>
             <span>{error}</span>
           </div>
         ) : result === null ? (
           <p className="message empty-message">
-            Run a query to inspect the match data.
+            Ask a question to explore the match data.
           </p>
         ) : result.columns.length === 0 ? (
           <p className="message empty-message">The query returned no columns.</p>

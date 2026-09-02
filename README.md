@@ -13,13 +13,15 @@ dota-data-server ──writes──▶ PostgreSQL ◀──reads── dota-quer
 | Project | Responsibility | Default port |
 | --- | --- | --- |
 | [`dota-data-server`](./dota-data-server/) | Fetch match data from Valve, own the database schema, and insert new matches and players | `3000` |
-| [`dota-query-server`](./dota-query-server/) | Run bounded, read-only queries against the populated database and expose the client API | `3001` |
-| [`dota-stats-client`](./dota-stats-client/) | Provide the temporary Vite/React SQL console and render query results | `5173` |
+| [`dota-query-server`](./dota-query-server/) | Translate plain-language questions with OpenRouter, then run bounded, read-only queries | `3001` |
+| [`dota-stats-client`](./dota-stats-client/) | Accept plain-language match questions and render query results | `5173` |
 
 The boundaries are intentional. `dota-data-server` only ingests data. The
 client never knows about or contacts that service; it talks only to
-`dota-query-server`. The query server connects to the same database but does
-not create schemas or write records.
+`dota-query-server`. The query server discovers readable schema metadata on the
+server, includes it in a server-constructed OpenRouter prompt, and never sends
+the schema or generated SQL to the browser. It does not create schemas or write
+records.
 
 ## Database access
 
@@ -32,8 +34,7 @@ Give the two servers different PostgreSQL roles:
   PostgreSQL sessions in code.
 
 See the [query server README](./dota-query-server/README.md) for an example role
-setup. The SQL console is a temporary development tool and should not be
-exposed to an untrusted network.
+setup and the additional query-generation safeguards.
 
 ## Local development
 

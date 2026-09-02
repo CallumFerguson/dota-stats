@@ -132,6 +132,37 @@ describe("runReadOnlyQuery", () => {
     assert.equal(fake.calls.length, 0);
   });
 
+  it("rejects generated SQL that is not strictly read-only", async () => {
+    const unsafeQueries = [
+      "DELETE FROM matches",
+      "WITH removed AS (DELETE FROM matches RETURNING *) SELECT * FROM removed",
+      "SELECT * INTO copied_matches FROM matches",
+      "SELECT * FROM matches FOR UPDATE",
+      "SELECT nextval('match_sequence')",
+      "SELECT 1; SELECT 2",
+    ];
+
+    for (const query of unsafeQueries) {
+      const fake = createFakeDatabase();
+      await assert.rejects(
+        () => runReadOnlyQuery(fake.database, query),
+        QueryValidationError,
+      );
+      assert.equal(fake.calls.length, 0);
+    }
+  });
+
+  it("does not treat keywords inside strings or quoted identifiers as commands", async () => {
+    const fake = createFakeDatabase();
+
+    await runReadOnlyQuery(
+      fake.database,
+      `SELECT 'delete update' AS "drop"`,
+    );
+
+    assert.equal(fake.calls.length, 4);
+  });
+
   it("wraps pool acquisition failures as database availability errors", async () => {
     const database = {
       connect: async () => {

@@ -95,21 +95,26 @@ h1 {
   text-transform: uppercase;
 }
 
+.query-help {
+  margin: 7px 0 0;
+  color: #696d69;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
 textarea {
   display: block;
   width: 100%;
-  min-height: 230px;
+  min-height: 150px;
   margin-top: 10px;
   resize: vertical;
   border: 1px solid #2d3134;
   border-radius: 8px;
   padding: 16px;
-  color: #e8e8e5;
-  background: #202427;
-  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
-  font-size: 0.9rem;
-  line-height: 1.65;
-  tab-size: 2;
+  color: #292d2f;
+  background: #fffdfa;
+  font-size: 1rem;
+  line-height: 1.6;
 }
 
 textarea:focus-visible,
@@ -257,7 +262,7 @@ tbody tr:nth-child(even) {
   }
 
   textarea {
-    min-height: 260px;
+    min-height: 180px;
   }
 
   .query-actions,

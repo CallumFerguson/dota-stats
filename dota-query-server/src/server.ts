@@ -7,13 +7,20 @@ import {
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Pool } from "pg";
-import { loadConfig } from "./config.js";
+import { loadConfig, type OpenRouterConfig } from "./config.js";
+import { loadDatabaseSchemaDescription } from "./database-schema.js";
 import {
   DatabaseUnavailableError,
   QUERY_TIMEOUT_MS,
   QueryValidationError,
   runReadOnlyQuery,
 } from "./query-runner.js";
+import {
+  generateSql,
+  InvalidModelResponseError,
+  NaturalLanguageQueryValidationError,
+  OpenRouterError,
+} from "./sql-generator.js";
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectDirectory = path.resolve(sourceDirectory, "..");
@@ -100,31 +107,53 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   }
 }
 
-function getQuery(body: unknown): string {
+function getQuestion(body: unknown): string {
   if (
     typeof body !== "object" ||
     body === null ||
     Array.isArray(body) ||
-    !("query" in body) ||
-    typeof body.query !== "string"
+    !("question" in body) ||
+    typeof body.question !== "string"
   ) {
     throw new HttpError(
       400,
-      'Request body must be an object with a string "query" field.',
+      'Request body must be an object with a string "question" field.',
     );
   }
 
-  return body.query;
+  return body.question;
 }
 
 function getQueryErrorResponse(error: unknown): {
   message: string;
   status: number;
 } {
-  if (error instanceof HttpError || error instanceof QueryValidationError) {
+  if (
+    error instanceof HttpError ||
+    error instanceof NaturalLanguageQueryValidationError
+  ) {
     return {
       message: error.message,
       status: error instanceof HttpError ? error.status : 400,
+    };
+  }
+
+  if (error instanceof OpenRouterError) {
+    return {
+      message: error.timedOut
+        ? "Query generation timed out."
+        : "Query generation service is unavailable.",
+      status: error.timedOut ? 504 : 502,
+    };
+  }
+
+  if (
+    error instanceof InvalidModelResponseError ||
+    error instanceof QueryValidationError
+  ) {
+    return {
+      message: "The model did not produce a safe read-only query.",
+      status: 502,
     };
   }
 
@@ -160,7 +189,10 @@ function getQueryErrorResponse(error: unknown): {
   }
 
   if (postgresCode !== null) {
-    return { message: getErrorMessage(error), status: 400 };
+    return {
+      message: "The generated query could not be executed.",
+      status: 502,
+    };
   }
 
   return { message: "Unexpected server error.", status: 500 };
@@ -170,6 +202,8 @@ async function handleRequest(
   request: IncomingMessage,
   response: ServerResponse,
   database: Pool,
+  databaseSchema: string,
+  openRouterConfig: OpenRouterConfig,
 ): Promise<void> {
   const requestUrl = new URL(request.url ?? "/", "http://localhost");
 
@@ -186,8 +220,18 @@ async function handleRequest(
 
   if (request.method === "POST" && requestUrl.pathname === "/api/query") {
     try {
-      const query = getQuery(await readJsonBody(request));
-      const result = await runReadOnlyQuery(database, query);
+      const question = getQuestion(await readJsonBody(request));
+      const generatedQuery = await generateSql(
+        openRouterConfig,
+        databaseSchema,
+        question,
+      );
+
+      if (generatedQuery.kind === "rejected") {
+        throw new HttpError(400, generatedQuery.reason);
+      }
+
+      const result = await runReadOnlyQuery(database, generatedQuery.sql);
       sendJson(response, 200, result);
     } catch (error: unknown) {
       const errorResponse = getQueryErrorResponse(error);
@@ -227,8 +271,29 @@ async function startServer(): Promise<void> {
     });
   }
 
+  let databaseSchema: string;
+
+  try {
+    databaseSchema = await loadDatabaseSchemaDescription(
+      database,
+      config.databaseSchema,
+    );
+  } catch (error: unknown) {
+    await database.end().catch(() => undefined);
+    throw new Error(
+      `Could not load the readable database schema: ${getErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
+
   const server = createServer((request, response) => {
-    void handleRequest(request, response, database).catch((error: unknown) => {
+    void handleRequest(
+      request,
+      response,
+      database,
+      databaseSchema,
+      config.openRouter,
+    ).catch((error: unknown) => {
       console.error(`HTTP request failed: ${getErrorMessage(error)}`);
 
       if (!response.headersSent) {

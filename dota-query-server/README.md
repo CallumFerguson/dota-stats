@@ -1,19 +1,31 @@
 # Dota Query Server
 
-This TypeScript server is the read-only API for the Dota Stats client. It
-connects to the PostgreSQL database populated by `dota-data-server`, executes
-temporary SQL-console queries, and returns tabular JSON results. It never calls
-Valve, creates database objects, or writes match data.
+This TypeScript server is the read-only API for the Dota Stats client. It turns
+plain-language questions into SQL with OpenRouter, runs the generated query
+against the PostgreSQL database populated by `dota-data-server`, and returns
+tabular JSON results. It never calls Valve, creates database objects, or writes
+match data.
 
 ## Read-only boundaries
 
-Every submitted query is wrapped as a result-producing subquery, limited to
-1,000 returned rows, and run in a `READ ONLY` transaction with a 10-second
-statement timeout. The PostgreSQL connection also starts with
-`default_transaction_read_only=on`, and the transaction is rolled back after
-both successful and failed queries. The server discards the PostgreSQL
-connection after each submitted query so session-level state cannot leak into
-another request.
+The browser sends only a plain-language question. The server discovers the
+columns visible to its database role and constructs the OpenRouter prompt
+itself; neither that schema description nor the generated SQL is returned to
+the client. System policy and JSON-encoded user text are placed in separate
+chat roles, and the prompt explicitly labels all user-generated content as
+untrusted request data. The model must return strict structured output that is
+either one query or a rejection. It is instructed to reject anything that is
+not a read-only request.
+
+Generated output is not trusted. Before PostgreSQL sees it, the server rejects
+non-`SELECT` statements, multiple statements, data-changing keywords,
+`SELECT INTO`, row locks, and known state-changing functions. Every accepted
+query is then wrapped as a result-producing subquery, limited to 1,000 returned
+rows, and run in a `READ ONLY` transaction with a 10-second statement timeout.
+The PostgreSQL connection also starts with `default_transaction_read_only=on`,
+and the transaction is rolled back after both successful and failed queries.
+The server discards the PostgreSQL connection after each generated query so
+session-level state cannot leak into another request.
 
 The database login is the authoritative security boundary. Configure `PGUSER`
 as a dedicated role with only `CONNECT`, schema `USAGE`, and `SELECT` on the
@@ -33,22 +45,32 @@ ALTER DEFAULT PRIVILEGES FOR ROLE your_ingestion_owner IN SCHEMA public
 ALTER ROLE dota_stats_reader SET default_transaction_read_only = on;
 ```
 
-This arbitrary-SQL endpoint is a temporary development tool. Even `SELECT`
-queries can be expensive or call functions with side effects outside ordinary
-tables, so do not expose this server to an untrusted network.
+The PostgreSQL permissions remain the authoritative boundary. Model prompts
+and SQL validation are defense in depth, not replacements for the restricted
+database role. Schema metadata and each user's question are sent to the
+configured OpenRouter model/provider, so configure OpenRouter's data handling
+to match your deployment requirements.
 
 ## Configuration
 
 Copy `.env.example` to `.env` and fill in the same database location used by
-`dota-data-server`, but use the dedicated read-only database role.
+`dota-data-server`, but use the dedicated read-only database role. Also provide
+an OpenRouter API key and a model that supports structured outputs.
 
 | Variable | Required | Description |
 | --- | --- | --- |
+| `OPENROUTER_API_KEY` | Yes | Server-side OpenRouter API key; never sent to the client |
+| `OPENROUTER_MODEL` | Yes | OpenRouter model ID with structured-output support |
+| `OPENROUTER_PROVIDER` | No | Restrict requests to one provider slug and disable provider fallback |
+| `OPENROUTER_REASONING_EFFORT` | No | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; defaults to `low` |
+| `OPENROUTER_MAX_COMPLETION_TOKENS` | No | Model output ceiling; defaults to `2000` |
+| `OPENROUTER_TIMEOUT_MS` | No | OpenRouter request timeout; defaults to `30000` |
 | `PGHOST` | Yes | PostgreSQL host |
 | `PGPORT` | Yes | PostgreSQL port |
 | `PGDATABASE` | Yes | Database populated by `dota-data-server` |
 | `PGUSER` | Yes | Dedicated read-only PostgreSQL role |
 | `PGPASSWORD` | Yes | Password for the read-only role |
+| `PGSCHEMA` | No | Schema made available to the model; defaults to `public` |
 | `PORT` | No | HTTP port; defaults to `3001` |
 
 The HTTP server binds to `127.0.0.1`.
@@ -77,11 +99,11 @@ Returns `{ "status": "ok" }` when the server can query PostgreSQL.
 
 ### `POST /api/query`
 
-Send JSON containing one result-producing SQL query:
+Send JSON containing one plain-language, read-only analytics question:
 
 ```json
 {
-  "query": "SELECT match_id, radiant_win FROM matches ORDER BY match_id DESC LIMIT 5"
+  "question": "Show the five newest matches and which side won each one."
 }
 ```
 
@@ -103,13 +125,13 @@ returning rows as arrays:
 ```
 
 PostgreSQL `BIGINT` values are strings so they do not lose precision in JSON.
-The query must fit within 50,000 UTF-8 bytes, cannot use parameter placeholders,
-and must be valid inside a SQL subquery. If more than 1,000 rows are produced,
-the response contains the first 1,000 and sets `truncated` to `true`.
+The question must fit within 10,000 UTF-8 bytes. Requests that are not clearly
+read-only are rejected. If more than 1,000 rows are produced, the response
+contains the first 1,000 and sets `truncated` to `true`.
 
 Try a request from PowerShell after the server starts:
 
 ```powershell
-$body = @{ query = 'SELECT COUNT(*) AS match_count FROM matches' } | ConvertTo-Json
+$body = @{ question = 'How many matches are stored?' } | ConvertTo-Json
 Invoke-RestMethod -Method Post -Uri http://127.0.0.1:3001/api/query -ContentType application/json -Body $body
 ```

@@ -1,11 +1,14 @@
 # Dota Stats Client
 
 This Vite, React, and TypeScript app is a temporary browser UI for checking
-that the Dota Stats services are connected. It provides a SQL textarea, sends
-the query to `dota-query-server`, and displays the returned rows in a table.
+that the Dota Stats services are connected. It accepts a plain-language match
+question, sends it to `dota-query-server`, and displays the returned rows in a
+table.
 
-The client has no database credentials and never communicates with
-`dota-data-server` or Valve.
+The client has no database credentials or database schema and never receives
+the generated SQL. It does not communicate with `dota-data-server`, OpenRouter,
+or Valve; all query generation and database access happens in
+`dota-query-server`.
 
 Vite 8 requires Node.js `^20.19.0 || >=22.12.0`.
 
@@ -23,7 +26,7 @@ Open <http://localhost:5173>. During development, Vite proxies relative `/api`
 requests to `http://127.0.0.1:3001`, so no client environment variables or CORS
 configuration are needed.
 
-The editor starts with a sample query. Select **Run query** or press
+The text area starts with a sample question. Select **Ask question** or press
 Ctrl/Command+Enter to send it. The page displays loading and error states,
 query duration, whether results were truncated to the 1,000-row server limit,
 and the result columns and rows.
