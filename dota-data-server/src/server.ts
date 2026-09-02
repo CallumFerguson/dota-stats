@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { Client, type ClientConfig } from "pg";
 import { createDatabaseSchema } from "./database-schema.js";
 import { storeMatches, type DotaMatch } from "./match-storage.js";
+import { RateLimitTracker } from "./rate-limit-tracker.js";
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectDirectory = path.resolve(sourceDirectory, "..");
@@ -20,6 +21,8 @@ const MAX_POLL_INTERVAL_MS = 6_000;
 const FULL_PAGES_PER_DELAY_REDUCTION = 5;
 const INITIAL_BACKOFF_MS = 6_000;
 const MAX_BACKOFF_MS = 60_000;
+const RATE_LIMIT_THRESHOLD = 10;
+const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1_000;
 const DATABASE_CONNECTION_TIMEOUT_MS = 10_000;
 const MATCH_HISTORY_ENDPOINT =
   "https://api.steampowered.com/IDOTA2Match_570/GetMatchHistory/v1/";
@@ -66,6 +69,17 @@ class ValveApiError extends Error {
   ) {
     super(message);
     this.name = "ValveApiError";
+  }
+}
+
+class ValveRateLimitThresholdError extends ValveApiError {
+  constructor(retryAfterMs: number | null) {
+    super(
+      `Valve API rate-limit threshold reached: received ${RATE_LIMIT_THRESHOLD} HTTP 429 responses within 10 minutes`,
+      429,
+      retryAfterMs,
+    );
+    this.name = "ValveRateLimitThresholdError";
   }
 }
 
@@ -192,6 +206,7 @@ function parseRetryAfter(retryAfter: string | null): number | null {
 async function fetchJson(
   requestUrl: URL,
   apiKeys: ApiKeyRotator,
+  rateLimits: RateLimitTracker,
 ): Promise<MatchApiResponse> {
   const selectedKey = apiKeys.next();
   requestUrl.searchParams.set("key", selectedKey.apiKey);
@@ -205,10 +220,19 @@ async function fetchJson(
   const response = await fetch(requestUrl);
 
   if (!response.ok) {
+    const retryAfterMs = parseRetryAfter(response.headers.get("retry-after"));
+
+    if (
+      response.status === 429 &&
+      rateLimits.record() >= RATE_LIMIT_THRESHOLD
+    ) {
+      throw new ValveRateLimitThresholdError(retryAfterMs);
+    }
+
     throw new ValveApiError(
       `Valve API request failed: ${response.status} ${response.statusText}`,
       response.status,
-      parseRetryAfter(response.headers.get("retry-after")),
+      retryAfterMs,
     );
   }
 
@@ -312,6 +336,11 @@ async function retryWithBackoff<T>(
     } catch (error: unknown) {
       const formattedFailure = (options.formatFailure ?? getErrorMessage)(error);
 
+      if (error instanceof ValveRateLimitThresholdError) {
+        pollingStatus.lastError = `${description}: ${formattedFailure}`;
+        throw error;
+      }
+
       if (options.shouldRetry !== undefined && !options.shouldRetry(error)) {
         pollingStatus.lastError = `${description}: ${formattedFailure}`;
         throw error;
@@ -340,6 +369,7 @@ async function retryWithBackoff<T>(
 
 async function fetchApproximateLatestSequenceNumber(
   apiKeys: ApiKeyRotator,
+  rateLimits: RateLimitTracker,
 ): Promise<number> {
   const requestUrl = new URL(MATCH_HISTORY_ENDPOINT);
   requestUrl.searchParams.set(
@@ -347,7 +377,7 @@ async function fetchApproximateLatestSequenceNumber(
     String(MATCHES_REQUESTED),
   );
 
-  const matchData = await fetchJson(requestUrl, apiKeys);
+  const matchData = await fetchJson(requestUrl, apiKeys, rateLimits);
   const sequenceNumbers = getMatches(matchData)
     .map((match) => match.match_seq_num)
     .filter((sequenceNumber): sequenceNumber is number =>
@@ -377,6 +407,7 @@ interface FetchedMatchPage {
 
 async function fetchMatchPage(
   apiKeys: ApiKeyRotator,
+  rateLimits: RateLimitTracker,
   startSequenceNumber: number,
 ): Promise<FetchedMatchPage> {
   const requestUrl = new URL(MATCH_SEQUENCE_ENDPOINT);
@@ -386,7 +417,7 @@ async function fetchMatchPage(
   );
   requestUrl.searchParams.set("matches_requested", String(MATCHES_REQUESTED));
 
-  const matchData = await fetchJson(requestUrl, apiKeys);
+  const matchData = await fetchJson(requestUrl, apiKeys, rateLimits);
   const matches = getMatches(matchData);
   const returnedSequenceNumbers = matches
     .map((match) => match.match_seq_num)
@@ -407,11 +438,12 @@ async function fetchMatchPage(
 async function fetchAndStoreMatchPage(
   database: Client,
   apiKeys: ApiKeyRotator,
+  rateLimits: RateLimitTracker,
   startSequenceNumber: number,
   fetchDescription: string,
 ): Promise<{ matchCount: number; nextSequenceNumber: number }> {
   const page = await retryWithBackoff(fetchDescription, () =>
-    fetchMatchPage(apiKeys, startSequenceNumber),
+    fetchMatchPage(apiKeys, rateLimits, startSequenceNumber),
   );
 
   await retryWithBackoff(
@@ -497,10 +529,11 @@ function logFetchSummary(
 async function pollForMatches(
   database: Client,
   apiKeys: ApiKeyRotator,
+  rateLimits: RateLimitTracker,
 ): Promise<never> {
   let nextSequenceNumber = await retryWithBackoff(
     "Finding an approximate latest match sequence number",
-    () => fetchApproximateLatestSequenceNumber(apiKeys),
+    () => fetchApproximateLatestSequenceNumber(apiKeys, rateLimits),
   );
   pollingStatus.nextSequenceNumber = nextSequenceNumber;
   pollingStatus.phase = "catching-up";
@@ -510,6 +543,7 @@ async function pollForMatches(
     const result = await fetchAndStoreMatchPage(
       database,
       apiKeys,
+      rateLimits,
       nextSequenceNumber,
       "Startup Valve match fetch",
     );
@@ -538,7 +572,7 @@ async function pollForMatches(
     const sequentialNextSequenceNumber = nextSequenceNumber;
     const refreshedSequenceNumber = await retryWithBackoff(
       "Refreshing the approximate latest match sequence number",
-      () => fetchApproximateLatestSequenceNumber(apiKeys),
+      () => fetchApproximateLatestSequenceNumber(apiKeys, rateLimits),
     );
     nextSequenceNumber = Math.max(
       sequentialNextSequenceNumber,
@@ -569,6 +603,7 @@ async function pollForMatches(
     const result = await fetchAndStoreMatchPage(
       database,
       apiKeys,
+      rateLimits,
       nextSequenceNumber,
       "Valve match fetch",
     );
@@ -648,6 +683,7 @@ async function startServer(): Promise<void> {
     parseApiKeys(process.env.STEAM_API_KEYS),
   );
   pollingStatus.apiKeyCount = apiKeys.count;
+  const rateLimits = new RateLimitTracker(RATE_LIMIT_WINDOW_MS);
   const database = await connectToDatabase();
 
   try {
@@ -720,7 +756,7 @@ async function startServer(): Promise<void> {
     );
   });
 
-  void pollForMatches(database, apiKeys).catch((error: unknown) =>
+  void pollForMatches(database, apiKeys, rateLimits).catch((error: unknown) =>
     stopAfterFatalError("Match polling stopped", error),
   );
 }

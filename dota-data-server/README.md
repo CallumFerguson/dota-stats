@@ -40,7 +40,9 @@ immediate catch-up burst.
 The console emits one summary line per successful fetch containing its match
 count, polling adjustment, and any behind/caught-up transition. Failed requests
 use exponential backoff beginning at six seconds, and a Valve `Retry-After`
-response is honored when it requires a longer wait.
+response is honored when it requires a longer wait. Rate limits are tracked
+across all Valve endpoints and API keys. If the server receives 10 HTTP 429
+responses within a rolling 10-minute window, it stops instead of retrying.
 
 Valve fetching and PostgreSQL storage have separate failure handling. A
 transient storage failure retries the already-fetched page without making
