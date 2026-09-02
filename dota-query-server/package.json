@@ -1,0 +1,23 @@
+{
+  "name": "dota-query-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Provides read-only SQL access to the Dota match database.",
+  "scripts": {
+    "start": "tsx src/server.ts",
+    "build": "tsc",
+    "start:compiled": "node dist/server.js",
+    "test": "tsx --test test/config.test.ts test/query-runner.test.ts"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.2",
+    "pg": "^8.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "@types/pg": "^8.23.1",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  }
+}
