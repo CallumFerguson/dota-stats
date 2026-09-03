@@ -9,6 +9,7 @@ interface QueryColumn {
 }
 
 interface QueryResult {
+  assumptions?: string;
   columns: QueryColumn[];
   command: string;
   durationMs: number;
@@ -30,6 +31,8 @@ function isQueryResult(value: unknown): value is QueryResult {
   return (
     Array.isArray(candidate.columns) &&
     Array.isArray(candidate.rows) &&
+    (candidate.assumptions === undefined ||
+      typeof candidate.assumptions === "string") &&
     typeof candidate.durationMs === "number" &&
     typeof candidate.rowCount === "number" &&
     typeof candidate.truncated === "boolean"
@@ -171,6 +174,13 @@ function App() {
                 : ""}
           </p>
         </div>
+
+        {result?.assumptions ? (
+          <div className="message assumption-message" role="note">
+            <strong>Assumptions</strong>
+            <span>{result.assumptions}</span>
+          </div>
+        ) : null}
 
         {error ? (
           <div className="message error-message" role="alert">

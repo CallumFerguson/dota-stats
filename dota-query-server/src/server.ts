@@ -232,7 +232,13 @@ async function handleRequest(
       }
 
       const result = await runReadOnlyQuery(database, generatedQuery.sql);
-      sendJson(response, 200, result);
+      sendJson(
+        response,
+        200,
+        generatedQuery.assumptions === undefined
+          ? result
+          : { ...result, assumptions: generatedQuery.assumptions },
+      );
     } catch (error: unknown) {
       const errorResponse = getQueryErrorResponse(error);
 

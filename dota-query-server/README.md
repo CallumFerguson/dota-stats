@@ -120,11 +120,14 @@ returning rows as arrays:
   "durationMs": 12.4,
   "rowCount": 1,
   "rows": [["123456789", true]],
-  "truncated": false
+  "truncated": false,
+  "assumptions": "Treated Radiant as the first team and Dire as the second team."
 }
 ```
 
 PostgreSQL `BIGINT` values are strings so they do not lose precision in JSON.
+The optional `assumptions` field is included when the question generator made a
+material assumption while interpreting an underspecified question.
 The question must fit within 10,000 UTF-8 bytes. Requests that are not clearly
 read-only are rejected. If more than 1,000 rows are produced, the response
 contains the first 1,000 and sets `truncated` to `true`.

@@ -200,6 +200,16 @@ button:disabled {
   background: #fff1f1;
 }
 
+.assumption-message {
+  display: grid;
+  gap: 5px;
+  border-bottom: 1px solid #ded8ce;
+  color: #5e4c20;
+  background: #fff9e8;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
 .table-scroll {
   overflow-x: auto;
 }

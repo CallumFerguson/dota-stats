@@ -51,7 +51,14 @@ describe("buildSqlGeneratorMessages", () => {
 
     assert.equal(messages[0].role, "system");
     assert.match(messages[0].content, /server_policy/);
+    assert.match(messages[0].content, /dotabuff_style_defaults/);
     assert.match(messages[0].content, /never supplied by the client/);
+    assert.match(messages[0].content, /Interpret the user's intent generously/);
+    assert.match(messages[0].content, /Reject for ambiguity only when/);
+    assert.match(messages[0].content, /trailing 30 days/);
+    assert.match(messages[0].content, /Exclude backpack_0 through backpack_2/);
+    assert.match(messages[0].content, /Deduplicate within a player-match/);
+    assert.match(messages[0].content, /Hero pick rate is distinct matches/);
     assert.match(messages[0].content, /TABLE "public"\."matches"/);
     assert.doesNotMatch(messages[0].content, /Ignore the policy/);
     assert.equal(messages[1].role, "user");
@@ -79,6 +86,7 @@ describe("generateSql", () => {
         status: "query",
         sql: "SELECT COUNT(*) AS match_count FROM public.matches",
         reason: "",
+        assumptions: "",
       });
     };
 
@@ -140,6 +148,7 @@ describe("generateSql", () => {
         status: "rejected",
         sql: "",
         reason: "Only read-only match analysis is allowed.",
+        assumptions: "",
       });
 
     const result = await generateSql(
@@ -156,12 +165,39 @@ describe("generateSql", () => {
     });
   });
 
+  it("returns material assumptions with an otherwise valid query", async () => {
+    const fetchImplementation: typeof fetch = async () =>
+      createOpenRouterResponse({
+        status: "query",
+        sql: "SELECT item_id, COUNT(*) AS wins FROM public.player_items GROUP BY item_id",
+        reason: "",
+        assumptions:
+          "Used the six active and dedicated neutral slots and attributed wins using each player's team.",
+      });
+
+    const result = await generateSql(
+      config,
+      "schema",
+      "Show item win rates",
+      fetchImplementation,
+      () => undefined,
+    );
+
+    assert.deepEqual(result, {
+      kind: "query",
+      sql: "SELECT item_id, COUNT(*) AS wins FROM public.player_items GROUP BY item_id",
+      assumptions:
+        "Used the six active and dedicated neutral slots and attributed wins using each player's team.",
+    });
+  });
+
   it("rejects inconsistent structured model output", async () => {
     const fetchImplementation: typeof fetch = async () =>
       createOpenRouterResponse({
         status: "query",
         sql: "",
         reason: "",
+        assumptions: "",
       });
 
     await assert.rejects(
