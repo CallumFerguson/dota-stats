@@ -72,6 +72,7 @@ export interface QueryResponse {
   durationMs: number;
   rowCount: number;
   rows: unknown[][];
+  sql: string;
   truncated: boolean;
 }
 
@@ -264,6 +265,7 @@ export async function runReadOnlyQuery(
   query: string,
 ): Promise<QueryResponse> {
   const normalizedQuery = normalizeQuery(query);
+  const sql = wrapQuery(normalizedQuery);
   let client;
 
   try {
@@ -287,7 +289,7 @@ export async function runReadOnlyQuery(
 
     const result = await client.query<unknown[]>({
       name: QUERY_PREPARED_STATEMENT_NAME,
-      text: wrapQuery(normalizedQuery),
+      text: sql,
       rowMode: "array",
     });
     const truncated = result.rows.length > MAX_RESULT_ROWS;
@@ -305,6 +307,7 @@ export async function runReadOnlyQuery(
       durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
       rowCount: rows.length,
       rows,
+      sql,
       truncated,
     };
   } catch (error: unknown) {

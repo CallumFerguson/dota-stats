@@ -88,6 +88,8 @@ describe("runReadOnlyQuery", () => {
       rowMode: "array",
     });
     assert.equal(fake.calls[3], "ROLLBACK");
+    const executedQuery = fake.calls[2] as QueryArrayConfig;
+    assert.equal(result.sql, executedQuery.text);
     assert.equal(result.rowCount, MAX_RESULT_ROWS);
     assert.equal(result.rows.length, MAX_RESULT_ROWS);
     assert.equal(result.truncated, true);

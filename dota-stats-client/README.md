@@ -3,10 +3,10 @@
 This Vite, React, and TypeScript app is a temporary browser UI for checking
 that the Dota Stats services are connected. It accepts a plain-language match
 question, sends it to `dota-query-server`, and displays the returned rows in a
-table.
+table, with the final executed SQL in an expandable section below the results.
 
-The client has no database credentials or database schema and never receives
-the generated SQL. It does not communicate with `dota-data-server`, OpenRouter,
+The client has no database credentials or full database schema description.
+It receives the executed SQL with successful results. It does not communicate with `dota-data-server`, OpenRouter,
 or Valve; all query generation and database access happens in
 `dota-query-server`.
 
@@ -29,7 +29,8 @@ configuration are needed.
 The text area starts with a sample question. Select **Ask question** or press
 Ctrl/Command+Enter to send it. The page displays loading and error states,
 query duration, whether results were truncated to the 1,000-row server limit,
-and the result columns and rows.
+and the result columns and rows. **Executed SQL** shows the exact statement
+run by PostgreSQL, including the server's row-limit wrapper, and can be collapsed.
 
 ## Commands
 

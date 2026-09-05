@@ -118,7 +118,9 @@ textarea {
 }
 
 textarea:focus-visible,
-button:focus-visible {
+button:focus-visible,
+.executed-sql summary:focus-visible,
+.executed-sql pre:focus-visible {
   outline: 3px solid #8a3135;
   outline-offset: 2px;
 }
@@ -212,6 +214,35 @@ button:disabled {
 
 .table-scroll {
   overflow-x: auto;
+}
+
+.executed-sql {
+  border-top: 1px solid #ded8ce;
+  padding: 16px 20px;
+}
+
+.executed-sql summary {
+  color: #494b4a;
+  font-size: 0.84rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.executed-sql pre {
+  max-height: 360px;
+  margin: 12px 0 0;
+  overflow: auto;
+  border: 1px solid #ded8ce;
+  border-radius: 8px;
+  padding: 16px;
+  background: #fffdfa;
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
+.executed-sql code {
+  font: inherit;
 }
 
 table {

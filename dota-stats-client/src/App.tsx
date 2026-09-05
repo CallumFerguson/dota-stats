@@ -15,6 +15,7 @@ interface QueryResult {
   durationMs: number;
   rowCount: number;
   rows: unknown[][];
+  sql: string;
   truncated: boolean;
 }
 
@@ -35,6 +36,7 @@ function isQueryResult(value: unknown): value is QueryResult {
       typeof candidate.assumptions === "string") &&
     typeof candidate.durationMs === "number" &&
     typeof candidate.rowCount === "number" &&
+    typeof candidate.sql === "string" &&
     typeof candidate.truncated === "boolean"
   );
 }
@@ -74,6 +76,7 @@ function App() {
     }
 
     setIsRunning(true);
+    setResult(null);
     setError(null);
 
     try {
@@ -187,7 +190,7 @@ function App() {
             <strong>Couldn’t answer that</strong>
             <span>{error}</span>
           </div>
-        ) : result === null ? (
+        ) : isRunning ? null : result === null ? (
           <p className="message empty-message">
             Ask a question to explore the match data.
           </p>
@@ -228,6 +231,15 @@ function App() {
             ) : null}
           </div>
         )}
+
+        {result !== null ? (
+          <details className="executed-sql" open>
+            <summary>Executed SQL</summary>
+            <pre tabIndex={0} aria-label="Executed SQL query">
+              <code>{result.sql}</code>
+            </pre>
+          </details>
+        ) : null}
       </section>
     </main>
   );

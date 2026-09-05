@@ -10,8 +10,8 @@ match data.
 
 The browser sends only a plain-language question. The server discovers the
 columns visible to its database role and constructs the OpenRouter prompt
-itself; neither that schema description nor the generated SQL is returned to
-the client. System policy and JSON-encoded user text are placed in separate
+itself. The schema description stays on the server; successful responses include
+the final SQL statement executed against PostgreSQL. System policy and JSON-encoded user text are placed in separate
 chat roles, and the prompt explicitly labels all user-generated content as
 untrusted request data. The model must return strict structured output that is
 either one query or a rejection. It is instructed to reject anything that is
@@ -120,12 +120,16 @@ returning rows as arrays:
   "durationMs": 12.4,
   "rowCount": 1,
   "rows": [["123456789", true]],
+  "sql": "SELECT * FROM (\nSELECT match_id, radiant_win FROM matches ORDER BY start_time DESC LIMIT 5\n) AS query_result\nLIMIT 1001",
   "truncated": false,
   "assumptions": "Treated Radiant as the first team and Dire as the second team."
 }
 ```
 
 PostgreSQL `BIGINT` values are strings so they do not lose precision in JSON.
+The `sql` field contains the exact executed statement, including the server's
+row-limit wrapper. It fetches up to 1,001 rows to detect truncation before
+returning at most 1,000 rows to the client.
 The optional `assumptions` field is included when the question generator made a
 material assumption while interpreting an underspecified question.
 The question must fit within 10,000 UTF-8 bytes. Requests that are not clearly

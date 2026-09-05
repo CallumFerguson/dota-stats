@@ -19,8 +19,9 @@ dota-data-server ──writes──▶ PostgreSQL ◀──reads── dota-quer
 The boundaries are intentional. `dota-data-server` only ingests data. The
 client never knows about or contacts that service; it talks only to
 `dota-query-server`. The query server discovers readable schema metadata on the
-server, includes it in a server-constructed OpenRouter prompt, and never sends
-the schema or generated SQL to the browser. It does not create schemas or write
+server and includes it in a server-constructed OpenRouter prompt. Successful
+answers include the final executed SQL for display in the browser; the full
+schema description stays on the server. It does not create schemas or write
 records.
 
 ## Database access
