@@ -1,4 +1,5 @@
 import type { Client } from "pg";
+import { INSERT_PLAYER_ITEMS_SQL, INSERT_UNKNOWN_ITEMS_SQL } from "./item-storage.js";
 
 export interface DotaMatchPlayer {
   account_id?: number;
@@ -28,9 +29,9 @@ export interface DotaMatchPlayer {
   xp_per_min?: number;
   level?: number;
   net_worth?: number;
-  aghanims_scepter?: number;
-  aghanims_shard?: number;
-  moonshard?: number;
+  aghanims_scepter?: number | null;
+  aghanims_shard?: number | null;
+  moonshard?: number | null;
   hero_damage?: number;
   tower_damage?: number;
   hero_healing?: number;
@@ -229,8 +230,12 @@ function requireSafeInteger(value: number | undefined, name: string): number {
   return value as number;
 }
 
-function toOptionalBoolean(value: number | undefined): boolean | null {
-  return value === undefined ? null : value !== 0;
+function toOptionalBoolean(value: number | null | undefined): boolean | null {
+  if (value === undefined || value === null) return null;
+  if (!Number.isSafeInteger(value)) {
+    throw new Error("Valve upgrade flags must be safe integers or null.");
+  }
+  return value !== 0;
 }
 
 function validateSafeIntegerFields(
@@ -404,6 +409,9 @@ export async function storeMatches(
 
     if (playerRows.length > 0) {
       await database.query(INSERT_PLAYERS_SQL, [JSON.stringify(playerRows)]);
+      const matchIds = JSON.stringify([...new Set(playerRows.map((row) => row.match_id))]);
+      await database.query(INSERT_UNKNOWN_ITEMS_SQL, [matchIds]);
+      await database.query(INSERT_PLAYER_ITEMS_SQL, [matchIds]);
     }
 
     await database.query("COMMIT");

@@ -24,6 +24,13 @@ answers include the final executed SQL for display in the browser; the full
 schema description stays on the server. It does not create schemas or write
 records.
 
+Item analytics use `player_item_results`: one canonical item per player-match,
+including inventory, backpacks, neutral items, and reported persistent upgrades.
+`player_results` supplies player populations and consistent outcomes. The data
+server owns the catalog and normalized observations; the query server discovers
+these views and their descriptions and prompts for simple grouped queries.
+See the [item schema and SQL example](./dota-data-server/README.md#end-of-match-item-analytics).
+
 ## Database access
 
 Give the two servers different PostgreSQL roles:

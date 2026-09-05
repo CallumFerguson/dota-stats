@@ -9,8 +9,9 @@ match data.
 ## Read-only boundaries
 
 The browser sends only a plain-language question. The server discovers the
-columns visible to its database role and constructs the OpenRouter prompt
-itself. The schema description stays on the server; successful responses include
+tables/views, columns, and relation descriptions visible to its database role
+and constructs the OpenRouter prompt itself. The schema description stays on
+the server; successful responses include
 the final SQL statement executed against PostgreSQL. System policy and JSON-encoded user text are placed in separate
 chat roles, and the prompt explicitly labels all user-generated content as
 untrusted request data. The model must return strict structured output that is
@@ -50,6 +51,30 @@ and SQL validation are defense in depth, not replacements for the restricted
 database role. Schema metadata and each user's question are sent to the
 configured OpenRouter model/provider, so configure OpenRouter's data handling
 to match your deployment requirements.
+
+## Item queries
+
+The prompt prefers `player_item_results` for item statistics. This view already
+combines inventory, backpacks, both neutral fields, and reported persistent
+upgrades into one row per player-match and canonical item. Names and categories
+come from the seeded item catalog. Queries group and aggregate these rows;
+they do not need to unpivot slots, deduplicate copies, join match outcomes, or
+union consumed-upgrade flags.
+
+"Show the win rate of each item that is in at least 100 games" defaults to the
+trailing 30 days, `won IS NOT NULL`, and `HAVING COUNT(*) >= 100` on this view.
+The count is player-match occurrences. An explicit request for distinct matches
+uses `COUNT(DISTINCT match_id)` for the threshold. All item categories are
+included unless requested otherwise. Use rate is only added when requested;
+its denominator uses complete snapshots in `player_results`, including empty
+inventories, with the same filters as the numerator. See the
+[data schema and example SQL](../dota-data-server/README.md#end-of-match-item-analytics).
+
+After recreating the database, start `dota-data-server` first to create and seed
+the new schema. The SELECT grants above cover views as well as tables; repeat
+the grant on existing objects if the owner role's default privileges were not
+configured before creation. Restart the query server after schema changes so
+its startup schema discovery includes the new relations and descriptions.
 
 ## Configuration
 

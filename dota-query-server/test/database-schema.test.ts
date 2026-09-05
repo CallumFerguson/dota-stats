@@ -51,4 +51,18 @@ describe("loadDatabaseSchemaDescription", () => {
       /No readable tables or views/,
     );
   });
+
+  it("describes analytics views and their database-owned semantics", async () => {
+    const database = {
+      query: async () => ({ rows: [{
+        table_name: "player_item_results", table_type: "VIEW",
+        relation_description: "One row per player-match and canonical item.",
+        column_name: "item_id", data_type: "bigint", udt_name: "int8",
+        is_nullable: "YES", ordinal_position: 1,
+      }] }),
+    } as unknown as Pool;
+    const description = await loadDatabaseSchemaDescription(database, "analytics");
+    assert.equal(description,
+      'VIEW "analytics"."player_item_results"\n  Description: One row per player-match and canonical item.\n  - "item_id": bigint');
+  });
 });

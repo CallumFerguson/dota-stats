@@ -30,9 +30,9 @@ describe("Dota match integer storage", () => {
 
     await createDatabaseSchema(database);
 
-    assert.equal(calls.length, 1);
-    assert.match(calls[0].text, /gold_per_min BIGINT/);
-    assert.doesNotMatch(calls[0].text, /\b(?:SMALLINT|INTEGER)\b/);
+    assert.equal(calls.length, 4);
+    assert.match(calls[1].text, /gold_per_min BIGINT/);
+    assert.doesNotMatch(calls[1].text, /\b(?:SMALLINT|INTEGER)\b/);
   });
 
   it("stores values beyond SMALLINT and INTEGER ranges", async () => {
@@ -55,7 +55,9 @@ describe("Dota match integer storage", () => {
 
     assert.deepEqual(
       calls.map((call) => call.text.trim().split("\n", 1)[0]),
-      ["BEGIN", "INSERT INTO matches (", "INSERT INTO match_players (", "COMMIT"],
+      ["BEGIN", "INSERT INTO matches (", "INSERT INTO match_players (",
+        "INSERT INTO items (item_id, item_name, item_category, canonical_item_id)",
+        "INSERT INTO match_player_items (match_id, player_slot, item_id, observed_held, upgrade_reported)", "COMMIT"],
     );
     assert.doesNotMatch(calls[1].text, /\b(?:SMALLINT|INTEGER)\b/);
     assert.doesNotMatch(calls[2].text, /\b(?:SMALLINT|INTEGER)\b/);

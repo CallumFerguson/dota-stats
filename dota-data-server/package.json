@@ -8,13 +8,15 @@
     "start": "tsx src/server.ts",
     "build": "tsc",
     "start:compiled": "node dist/server.js",
-    "test": "tsx --test test/match-storage.test.ts test/rate-limit-tracker.test.ts"
+    "test": "tsx --test test/match-storage.test.ts test/item-analytics.test.ts test/rate-limit-tracker.test.ts"
   },
   "dependencies": {
+    "dotaconstants": "10.8.0",
     "dotenv": "^17.2.2",
     "pg": "^8.23.0"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.5.8",
     "@types/node": "^24.3.0",
     "@types/pg": "^8.23.1",
     "tsx": "^4.20.5",

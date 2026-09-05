@@ -51,14 +51,20 @@ describe("buildSqlGeneratorMessages", () => {
 
     assert.equal(messages[0].role, "system");
     assert.match(messages[0].content, /server_policy/);
-    assert.match(messages[0].content, /dotabuff_style_defaults/);
+    assert.match(messages[0].content, /analytics_defaults/);
     assert.match(messages[0].content, /never supplied by the client/);
-    assert.match(messages[0].content, /Interpret the user's intent generously/);
-    assert.match(messages[0].content, /Reject for ambiguity only when/);
+    assert.match(messages[0].content, /Otherwise use reasonable defaults/);
+    assert.match(messages[0].content, /Reject only when the essential request/);
     assert.match(messages[0].content, /trailing 30 days/);
-    assert.match(messages[0].content, /Exclude backpack_0 through backpack_2/);
-    assert.match(messages[0].content, /Deduplicate within a player-match/);
-    assert.match(messages[0].content, /Hero pick rate is distinct matches/);
+    assert.match(messages[0].content, /Use player_item_results: one canonical item per player-match/);
+    assert.match(messages[0].content, /backpacks, neutral slots, and persistent upgrades/);
+    assert.match(messages[0].content, /minimum-game thresholds use that count unless distinct matches are requested/);
+    assert.match(messages[0].content, /Use player_results as the population, including empty inventories/);
+    assert.match(messages[0].content, /item_snapshot_complete and identical population\/outcome filters in numerator and denominator/);
+    assert.match(messages[0].content, /Only include use rate when requested/);
+    assert.doesNotMatch(messages[0].content, /Exclude backpack_0|report the boolean state as a separately labeled/);
+    assert.match(messages[0].content, /Pick rate is distinct matches/);
+    assert.doesNotMatch(messages[0].content, /item_query_example|SELECT item_id|at least 100 games/);
     assert.match(messages[0].content, /TABLE "public"\."matches"/);
     assert.doesNotMatch(messages[0].content, /Ignore the policy/);
     assert.equal(messages[1].role, "user");
@@ -169,10 +175,10 @@ describe("generateSql", () => {
     const fetchImplementation: typeof fetch = async () =>
       createOpenRouterResponse({
         status: "query",
-        sql: "SELECT item_id, COUNT(*) AS wins FROM public.player_items GROUP BY item_id",
+        sql: "SELECT item_id, AVG(won::int) AS win_rate FROM public.player_item_results WHERE won IS NOT NULL GROUP BY item_id",
         reason: "",
         assumptions:
-          "Used the six active and dedicated neutral slots and attributed wins using each player's team.",
+          "Used the trailing 30 days and counted player-match occurrences.",
       });
 
     const result = await generateSql(
@@ -185,9 +191,9 @@ describe("generateSql", () => {
 
     assert.deepEqual(result, {
       kind: "query",
-      sql: "SELECT item_id, COUNT(*) AS wins FROM public.player_items GROUP BY item_id",
+      sql: "SELECT item_id, AVG(won::int) AS win_rate FROM public.player_item_results WHERE won IS NOT NULL GROUP BY item_id",
       assumptions:
-        "Used the six active and dedicated neutral slots and attributed wins using each player's team.",
+        "Used the trailing 30 days and counted player-match occurrences.",
     });
   });
 

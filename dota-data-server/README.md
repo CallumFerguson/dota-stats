@@ -7,19 +7,112 @@ matches, advances its sequence cursor, and stores the matches in PostgreSQL.
 Before the HTTP server starts or any Valve request is made, the app validates
 its PostgreSQL connection settings and connects to the database. A missing or
 empty setting, an invalid port, or a failed connection stops startup. It then
-creates the `matches` and `match_players` tables and supporting index when they
-do not already exist. Schema creation uses plain SQL in `src/database-schema.ts`;
-there is no migration framework.
+creates the raw `matches` and `match_players` tables, the `items` catalog and
+`match_player_items` observation table, their indexes, and the analytics views.
+It seeds item metadata in the same schema-creation transaction. Schema creation
+uses plain SQL in `src/database-schema.ts`; there is no migration framework.
+This schema is intended for a fresh database; there is no legacy-data backfill.
 
 Each fetched page is stored in one database transaction. Existing match and
-player primary keys are ignored, which makes overlapping fetches safe. The
+player primary keys are ignored, which makes overlapping fetches safe. Item
+observations are derived from the persisted player snapshots in that same
+transaction, so a conflicting fetch cannot change items on an unchanged raw
+player record. Unknown item IDs receive catalog placeholders before
+normalization; failures roll back the entire page. The
 large `picks_bans` and `ability_upgrades` arrays are intentionally discarded.
 All integer values supplied by Valve use PostgreSQL `BIGINT` columns. This is a
 deliberate schema-wide rule: Valve can return unusual values outside narrower
 integer ranges, including from custom or malformed matches, so fields are not
 sized from their expected gameplay values. Incoming values must still be safe
 JavaScript integers, which fit comfortably inside `BIGINT`. Existing schemas
-are not altered automatically; schema changes are handled manually.
+are not altered automatically; table changes are handled manually. Analytics
+views and the normalization function are replaced at startup, and the pinned
+catalog is upserted without removing historical or unknown IDs.
+
+## End-of-match item analytics
+
+Use `player_item_results` for item queries and `player_results` for player
+populations and win/loss results. Raw slots are retained for inspection and
+explicit slot or copy-count questions.
+
+| Relation | Row meaning |
+| --- | --- |
+| `items` | A raw item ID with name, category, optional neutral tier, and canonical item ID |
+| `match_player_items` | One canonical item observed for one `(match_id, player_slot)` |
+| `player_results` | One player-match, including players with no items |
+| `player_item_results` | One canonical player-item occurrence with names, categories, filters, and outcomes |
+
+The primary key `(match_id, player_slot, item_id)` prevents duplicate copies
+from inflating counts. All six inventory slots, three backpack slots, and both
+neutral fields contribute to the same item set. Zero and missing slots do not
+produce observations. Two players holding the same item produce two rows.
+
+Persistent upgrades count for the recipient. Scepter (108), Blessing (271),
+Roshan Blessing (727), and the `aghanims_scepter` flag map to Scepter (108).
+Shard (609), its consumable variant (725), and `aghanims_shard` map to Shard
+(609). Moon Shard (247) and `moonshard` map to Moon Shard (247). A held item
+plus its reported upgrade still produces only one row. Recipes remain separate.
+`observed_held` records a positive slot observation; `upgrade_reported` retains
+the corresponding flag, including NULL for unknown or inapplicable. These fields
+do not establish who purchased an item or whether the upgrade was purchased,
+gifted, or otherwise granted. Sold items and ordinary consumed items are not
+reconstructed from the final snapshot.
+
+Names, IDs, and classifications come from the pinned
+[`dotaconstants` 10.8.0](https://github.com/odota/dotaconstants) package; startup
+does not download metadata. Categories are `regular`, `recipe`,
+`neutral_artifact`, `neutral_enchantment`, `neutral_token`, and `unknown`.
+Neutral tiers identify artifacts and `enhancement_` names identify enchantments;
+classification is independent of which slot held the item. Distinct item IDs
+are retained even when their names or tiers resemble one another. Incomplete
+metadata (including some retired neutral items) is classified as `unknown`,
+not guessed from a zero price. Unknown IDs are displayed as `Unknown item ID`
+and remain in all-item results. Review catalog/classification changes when
+updating the pinned package. If canonical mappings change, stored observations
+must also be rebuilt from raw snapshots; changing metadata alone does not
+renormalize existing rows.
+
+`team_won` uses Radiant slots 0-4 and Dire slots 128-132; a missing winner or
+nonstandard slot yields NULL. `won` additionally applies the existing personal
+loss rule for leaver statuses 2-6; statuses 0-1 follow the team result, and
+missing/invalid statuses yield NULL. Filter `won IS NOT NULL` for personal
+win rates. A win-rate-only query can use any positive item observation.
+
+`item_snapshot_complete` means all eleven slot fields and all three upgrade
+flags were supplied. For use rates, apply this filter to both the item numerator
+and the `player_results` denominator, together with identical population and
+outcome filters. This includes explicitly empty inventories and excludes
+unknown snapshots. Use the same completeness filter for claims that a player
+did not have an item; missing observations alone do not establish absence.
+
+For example, the win rate of each item appearing in at least 100 player-games:
+
+```sql
+SELECT item_id, item_name, item_category,
+  COUNT(*) AS player_match_occurrences,
+  ROUND(100.0 * AVG(won::int), 2) AS win_rate_percent
+FROM public.player_item_results
+WHERE start_time >= CURRENT_TIMESTAMP - INTERVAL '30 days'
+  AND won IS NOT NULL
+GROUP BY item_id, item_name, item_category
+HAVING COUNT(*) >= 100
+ORDER BY player_match_occurrences DESC, item_id;
+```
+
+All item categories are included by default. Use an `item_category` filter for
+a neutral-only or regular-item leaderboard. For a threshold of 100 distinct
+matches, use `HAVING COUNT(DISTINCT match_id) >= 100`; win rate still counts
+individual player occurrences.
+
+Start the data server before the query server so the latter can discover the
+new relations. Ensure its read-only role has SELECT on the new tables and views;
+see the [query server role setup](../dota-query-server/README.md#read-only-boundaries).
+
+Run `npm test` to execute ingestion, normalization, and example-query tests in
+an isolated in-memory PostgreSQL engine (PGlite), plus unit tests. Tests do not
+read `.env` or contact your database. Run `npm run build` to compile the server.
+
+## Polling
 
 Every Valve request uses the next API key from a round-robin rotation. At least
 two unique keys are required, retries rotate keys too, and duplicate keys are

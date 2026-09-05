@@ -6,6 +6,8 @@ interface SchemaColumnRow {
   is_nullable: "NO" | "YES";
   ordinal_position: number;
   table_name: string;
+  table_type: "BASE TABLE" | "VIEW";
+  relation_description: string | null;
   udt_name: string;
 }
 
@@ -16,7 +18,12 @@ SELECT
   columns.data_type,
   columns.udt_name,
   columns.is_nullable,
-  columns.ordinal_position
+  columns.ordinal_position,
+  tables.table_type,
+  obj_description(
+    format('%I.%I', columns.table_schema, columns.table_name)::regclass,
+    'pg_class'
+  ) AS relation_description
 FROM information_schema.columns AS columns
 JOIN information_schema.tables AS tables
   ON tables.table_schema = columns.table_schema
@@ -68,7 +75,8 @@ export async function loadDatabaseSchemaDescription(
       );
 
       return [
-        `TABLE ${quoteIdentifier(schemaName)}.${quoteIdentifier(tableName)}`,
+        `${columns[0].table_type === "VIEW" ? "VIEW" : "TABLE"} ${quoteIdentifier(schemaName)}.${quoteIdentifier(tableName)}`,
+        ...(columns[0].relation_description ? [`  Description: ${columns[0].relation_description}`] : []),
         ...columnLines,
       ].join("\n");
     })
