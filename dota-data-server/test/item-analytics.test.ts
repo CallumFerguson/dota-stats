@@ -150,6 +150,57 @@ describe("normalized item analytics (PostgreSQL)", () => {
     assert.equal(Number(result.rows[0].win_rate), 33.33);
   });
 
+  it("exposes team sides at slot boundaries independently of winner and leaver status", async () => {
+    const slots = [-1, 0, 4, 5, 127, 128, 132, 133];
+    await storeMatches(database, [match(slots.map((player_slot) =>
+      player({ player_slot, item_0: 1, leaver_status: 2 })), { radiant_win: undefined })]);
+    for (const view of ["player_results", "player_item_results"]) {
+      const { rows } = await postgres.query(`SELECT team_side, team_won, won FROM ${view} ORDER BY player_slot`);
+      assert.deepEqual(rows, [null, "radiant", "radiant", null, null, "dire", "dire", null]
+        .map((team_side) => ({ team_side, team_won: null, won: null })));
+    }
+    const schema = await loadDatabaseSchemaDescription(database as unknown as Pool, "public");
+    assert.equal((schema.match(/"team_side": text/g) ?? []).length, 2);
+    assert.match(schema, /Compare known team_side values within the same match/);
+  });
+
+  it("compares enemy Axe presence without confusing personal losses or multiplying appearances", async () => {
+    await storeMatches(database, [
+      match([player(), player({ player_slot: 128, hero_id: 2 }), player({ player_slot: 129, hero_id: 2 })]),
+      match([player({ leaver_status: 2 }), player({ player_slot: 128, hero_id: 2 })], { match_id: 2, match_seq_num: 2 }),
+      match([player({ player_slot: 128 }), player({ hero_id: 2, leaver_status: 2 })], { match_id: 3, match_seq_num: 3 }),
+      match([player(), player({ player_slot: 1, hero_id: 2 })], { match_id: 4, match_seq_num: 4 }),
+      match([player()], { match_id: 5, match_seq_num: 5, radiant_win: false }),
+    ]);
+    const { rows } = await postgres.query<{ enemy_axe: boolean; appearances: number; wins: number; win_rate: string }>(`
+      WITH appearances AS (
+        SELECT am.won, EXISTS (
+          SELECT 1 FROM player_results axe
+          WHERE axe.match_id = am.match_id AND axe.hero_id = 2
+            AND axe.team_side <> am.team_side
+        ) AS enemy_axe
+        FROM player_results am
+        WHERE am.hero_id = 1 AND am.won IS NOT NULL AND am.team_side IS NOT NULL
+          AND am.start_time >= CURRENT_TIMESTAMP - INTERVAL '30 days'
+      )
+      SELECT enemy_axe, COUNT(*) AS appearances, COUNT(*) FILTER (WHERE won) AS wins,
+        ROUND(100.0 * AVG(won::int), 2) AS win_rate
+      FROM appearances GROUP BY enemy_axe ORDER BY enemy_axe DESC
+    `);
+    assert.deepEqual(rows.map((row) => ({ ...row, appearances: Number(row.appearances), wins: Number(row.wins) })), [
+      { enemy_axe: true, appearances: 3, wins: 1, win_rate: "33.33" },
+      { enemy_axe: false, appearances: 2, wins: 1, win_rate: "50.00" },
+    ]);
+    const allies = await postgres.query<{ match_id: number }>(`
+      SELECT am.match_id FROM player_results am
+      WHERE am.hero_id = 1 AND EXISTS (
+        SELECT 1 FROM player_results axe WHERE axe.match_id = am.match_id
+          AND axe.player_slot <> am.player_slot AND axe.hero_id = 2 AND axe.team_side = am.team_side
+      )
+    `);
+    assert.deepEqual(allies.rows.map((row) => Number(row.match_id)), [4]);
+  });
+
   it("keeps repeat ingestion consistent with the original persisted snapshots", async () => {
     await storeMatches(database, [match([player({ item_0: 1 })])]);
     await storeMatches(database, [match([player({ item_0: 116, aghanims_scepter: 1 })])]);
@@ -230,8 +281,29 @@ describe("normalized item analytics (PostgreSQL)", () => {
   it("upgrades an existing schema and reseeds catalogs without losing observations", async () => {
     await storeMatches(database, [match([player({ item_0: 1 })])]);
     // Simulate the previous schema in this isolated database.
+    const legacyViews = [];
+    for (const name of ["player_results", "player_item_results"]) {
+      const { rows: columns } = await postgres.query<{ column_name: string }>(`
+        SELECT column_name FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = $1 AND column_name <> 'team_side'
+        ORDER BY ordinal_position
+      `, [name]);
+      const { rows: definitions } = await postgres.query<{ definition: string }>(
+        "SELECT pg_get_viewdef($1::regclass) AS definition", [name]);
+      legacyViews.push({ name, columns: columns.map((column) => column.column_name),
+        definition: definitions[0].definition.trim().replace(/;$/, "").replace(/,\s*pr\.team_side\b/, "") });
+    }
+    await postgres.exec("DROP VIEW player_item_results; DROP VIEW player_results");
+    for (const view of legacyViews) {
+      await postgres.exec(`CREATE VIEW ${view.name} AS SELECT ${view.columns.join(", ")} FROM (${view.definition}) AS legacy`);
+    }
     await postgres.exec("ALTER TABLE items DROP COLUMN name_aliases; DROP TABLE heroes, game_modes, lobby_types");
     await createDatabaseSchema(database);
+    for (const view of legacyViews) {
+      const result = await postgres.query(`SELECT * FROM ${view.name}`);
+      assert.deepEqual(result.fields.map((field) => field.name), [...view.columns, "team_side"]);
+      assert.equal(result.rows[0].team_side, "radiant");
+    }
     assert.equal((await postgres.query("SELECT * FROM player_item_results")).rows.length, 1);
     const resolve = await loadEntityResolver(database as unknown as Pool, "public");
     assert.deepEqual(resolve("BKB on AM in turbo").resolved.map((entity) => entity.ids), [[116], [1], [23]]);

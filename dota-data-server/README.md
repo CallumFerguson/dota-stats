@@ -86,11 +86,22 @@ updating the pinned package. If canonical mappings change, stored observations
 must also be rebuilt from raw snapshots; changing metadata alone does not
 renormalize existing rows.
 
+Both result views expose `team_side`: `radiant` for slots 0-4, `dire` for
+slots 128-132, and NULL for nonstandard slots. It is independent of the match
+winner and leaver status. Compare known sides within the same `match_id` for
+allies (`=`) or enemies (`<>`); exclude the same `player_slot` for teammates.
+For hero presence/absence, use `EXISTS`/`NOT EXISTS` against `player_results`
+and require a known side for the population player.
+
 `team_won` uses Radiant slots 0-4 and Dire slots 128-132; a missing winner or
 nonstandard slot yields NULL. `won` additionally applies the existing personal
 loss rule for leaver statuses 2-6; statuses 0-1 follow the team result, and
 missing/invalid statuses yield NULL. Filter `won IS NOT NULL` for personal
 win rates. A win-rate-only query can use any positive item observation.
+
+For existing databases, restart the updated data server to append `team_side`
+to both views without rebuilding observations, then restart the query server
+to refresh its schema metadata.
 
 `item_snapshot_complete` means all eleven slot fields and all three upgrade
 flags were supplied. For use rates, apply this filter to both the item numerator

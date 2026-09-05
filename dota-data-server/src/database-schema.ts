@@ -147,7 +147,12 @@ SELECT mp.match_id, mp.player_slot, mp.account_id, mp.hero_id, mp.hero_variant,
     AND mp.backpack_0 IS NOT NULL AND mp.backpack_1 IS NOT NULL AND mp.backpack_2 IS NOT NULL
     AND mp.item_neutral IS NOT NULL AND mp.item_neutral2 IS NOT NULL
     AND mp.aghanims_scepter IS NOT NULL AND mp.aghanims_shard IS NOT NULL
-    AND mp.moonshard IS NOT NULL) AS item_snapshot_complete
+    AND mp.moonshard IS NOT NULL) AS item_snapshot_complete,
+  CASE
+    WHEN mp.player_slot BETWEEN 0 AND 4 THEN 'radiant'
+    WHEN mp.player_slot BETWEEN 128 AND 132 THEN 'dire'
+    ELSE NULL
+  END AS team_side
 FROM match_players AS mp
 JOIN matches AS m ON m.match_id = mp.match_id
 CROSS JOIN LATERAL (
@@ -159,9 +164,13 @@ CROSS JOIN LATERAL (
 ) AS outcome;
 
 CREATE OR REPLACE VIEW player_item_results AS
-SELECT pr.*, mpi.item_id, i.internal_name AS item_internal_name,
+-- Keep existing column positions so CREATE OR REPLACE can upgrade installed views.
+SELECT pr.match_id, pr.player_slot, pr.account_id, pr.hero_id, pr.hero_variant,
+  pr.leaver_status, pr.start_time, pr.duration, pr.game_mode, pr.lobby_type,
+  pr.team_won, pr.won, pr.item_snapshot_complete,
+  mpi.item_id, i.internal_name AS item_internal_name,
   i.item_name, i.item_category, i.neutral_tier,
-  mpi.observed_held, mpi.upgrade_reported
+  mpi.observed_held, mpi.upgrade_reported, pr.team_side
 FROM match_player_items AS mpi
 JOIN player_results AS pr USING (match_id, player_slot)
 JOIN items AS i ON i.item_id = mpi.item_id;
@@ -173,7 +182,7 @@ COMMENT ON TABLE match_players IS
 COMMENT ON TABLE match_player_items IS
   'Exactly one observed canonical item per (match_id, player_slot, item_id), including backpacks and reported persistent upgrades. No row means no positive observation, not necessarily known absence.';
 COMMENT ON VIEW player_results IS
-  'One row per (match_id, player_slot), including empty inventories. won applies personal abandoner losses (leaver_status 2-6); unknown outcome/status or nonstandard player slot yields NULL. team_won ignores leaver status. For item use rate, require item_snapshot_complete and the same outcome/population filters in numerator and denominator.';
+  'One row per (match_id, player_slot), including empty inventories. team_side is radiant for slots 0-4, dire for slots 128-132, otherwise NULL; independent of winner and leaver status. Compare known team_side values within the same match for allies/enemies. won applies personal abandoner losses (leaver_status 2-6); unknown outcome/status or nonstandard player slot yields NULL. team_won ignores leaver status. For item use rate, require item_snapshot_complete and the same outcome/population filters in numerator and denominator.';
 COMMENT ON VIEW player_item_results IS
   'Preferred item analytics: exactly one row per (match_id, player_slot, canonical item_id). Inventory, backpack, neutral slots and reported upgrades already combined and deduplicated. COUNT(*) counts player-match occurrences; AVG(won::int) is win fraction with won IS NOT NULL. All categories are included. observed_held is a positive slot observation; upgrade_reported is the raw flag (NULL means unknown or inapplicable).';
 `;

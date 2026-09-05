@@ -89,6 +89,12 @@ data. Ensure the query role has SELECT on the new tables (see the grants above),
 then restart the query server. Missing or unreadable catalogs stop startup with
 a setup error instead of falling back to model-memorized IDs.
 
+For teammate and enemy queries, the generator uses `team_side` (`radiant` or
+`dire`) within the same match, independently of personal and team outcomes.
+The existing `won` policy still determines hero win rates. After upgrading,
+restart the data server first to add this column to the result views, then
+restart the query server to refresh schema discovery.
+
 ## Item queries
 
 The prompt prefers `player_item_results` for item statistics. This view already

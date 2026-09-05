@@ -65,6 +65,9 @@ describe("buildSqlGeneratorMessages", () => {
     assert.match(messages[0].content, /Only include use rate when requested/);
     assert.doesNotMatch(messages[0].content, /Exclude backpack_0|report the boolean state as a separately labeled/);
     assert.match(messages[0].content, /Pick rate is distinct matches/);
+    assert.match(messages[0].content, /Use team_side from player_results or player_item_results for ally\/enemy membership, never won or team_won/);
+    assert.match(messages[0].content, /Exclude the same player_slot/);
+    assert.match(messages[0].content, /population player's team_side IS NOT NULL/);
     assert.doesNotMatch(messages[0].content, /item_query_example|SELECT item_id|at least 100 games/);
     assert.match(messages[0].content, /TABLE "public"\."matches"/);
     assert.doesNotMatch(messages[0].content, /Ignore the policy/);
