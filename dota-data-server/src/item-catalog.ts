@@ -15,6 +15,14 @@ const itemIds = JSON.parse(readFileSync(path.join(constantsDirectory, "build/ite
 const metadata = JSON.parse(readFileSync(path.join(constantsDirectory, "build/items.json"), "utf8")) as Record<string, ItemMetadata>;
 const idsByName = new Map(Object.entries(itemIds).map(([id, name]) => [name, Number(id)]));
 
+const itemAliases: Record<string, string[]> = {
+  bfury: ["BF", "Battlefury"], black_king_bar: ["BKB"], blink: ["Blink Dagger"],
+  boots_of_travel: ["BoTs", "Travel Boots"], power_treads: ["Treads"],
+  sphere: ["Linkens", "Linken's"], ultimate_scepter: ["Aghs", "Scepter"],
+  aghanims_shard: ["Shard"], assault: ["AC", "Assault Cuirass"],
+  monkey_king_bar: ["MKB"], heart: ["Heart of Tarrasque"],
+};
+
 function requireItemId(name: string): number {
   const id = idsByName.get(name);
   if (id === undefined || !Number.isSafeInteger(id) || id <= 0) {
@@ -52,21 +60,23 @@ export const ITEM_CATALOG = Object.entries(itemIds)
     item_id: Number(id),
     internal_name: name,
     item_name: metadata[name]?.dname || name,
+    name_aliases: itemAliases[name] ?? [],
     item_category: category(name, metadata[name]),
     neutral_tier: metadata[name]?.tier ?? null,
     canonical_item_id: canonicalIds.get(Number(id)) ?? Number(id),
   }));
 
 export const SEED_ITEM_CATALOG_SQL = `
-INSERT INTO items (item_id, internal_name, item_name, item_category, neutral_tier, canonical_item_id)
-SELECT item_id, internal_name, item_name, item_category, neutral_tier, canonical_item_id
+INSERT INTO items (item_id, internal_name, item_name, item_category, neutral_tier, canonical_item_id, name_aliases)
+SELECT item_id, internal_name, item_name, item_category, neutral_tier, canonical_item_id, name_aliases
 FROM JSONB_TO_RECORDSET($1::JSONB) AS catalog (
   item_id BIGINT, internal_name TEXT, item_name TEXT, item_category TEXT,
-  neutral_tier BIGINT, canonical_item_id BIGINT
+  neutral_tier BIGINT, canonical_item_id BIGINT, name_aliases TEXT[]
 )
 ON CONFLICT (item_id) DO UPDATE SET
   internal_name = EXCLUDED.internal_name,
   item_name = EXCLUDED.item_name,
+  name_aliases = EXCLUDED.name_aliases,
   item_category = EXCLUDED.item_category,
   neutral_tier = EXCLUDED.neutral_tier,
   canonical_item_id = EXCLUDED.canonical_item_id;

@@ -30,7 +30,8 @@ describe("Dota match integer storage", () => {
 
     await createDatabaseSchema(database);
 
-    assert.equal(calls.length, 4);
+    assert.equal(calls[0].text, "BEGIN");
+    assert.equal(calls.at(-1)?.text, "COMMIT");
     assert.match(calls[1].text, /gold_per_min BIGINT/);
     assert.doesNotMatch(calls[1].text, /\b(?:SMALLINT|INTEGER)\b/);
   });

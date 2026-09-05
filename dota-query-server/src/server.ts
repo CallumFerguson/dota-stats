@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { Pool } from "pg";
 import { loadConfig, type OpenRouterConfig } from "./config.js";
 import { loadDatabaseSchemaDescription } from "./database-schema.js";
+import { loadEntityResolver, type EntityResolver } from "./entity-resolver.js";
 import {
   DatabaseUnavailableError,
   QUERY_TIMEOUT_MS,
@@ -204,6 +205,7 @@ async function handleRequest(
   database: Pool,
   databaseSchema: string,
   openRouterConfig: OpenRouterConfig,
+  resolveEntities: EntityResolver,
 ): Promise<void> {
   const requestUrl = new URL(request.url ?? "/", "http://localhost");
 
@@ -225,6 +227,9 @@ async function handleRequest(
         openRouterConfig,
         databaseSchema,
         question,
+        undefined,
+        undefined,
+        resolveEntities,
       );
 
       if (generatedQuery.kind === "rejected") {
@@ -278,16 +283,18 @@ async function startServer(): Promise<void> {
   }
 
   let databaseSchema: string;
+  let resolveEntities: EntityResolver;
 
   try {
     databaseSchema = await loadDatabaseSchemaDescription(
       database,
       config.databaseSchema,
     );
+    resolveEntities = await loadEntityResolver(database, config.databaseSchema);
   } catch (error: unknown) {
     await database.end().catch(() => undefined);
     throw new Error(
-      `Could not load the readable database schema: ${getErrorMessage(error)}`,
+      `Could not load the readable database schema/catalogs: ${getErrorMessage(error)}. Start dota-data-server to seed reference tables and ensure the query role has SELECT access.`,
       { cause: error },
     );
   }
@@ -299,6 +306,7 @@ async function startServer(): Promise<void> {
       database,
       databaseSchema,
       config.openRouter,
+      resolveEntities,
     ).catch((error: unknown) => {
       console.error(`HTTP request failed: ${getErrorMessage(error)}`);
 

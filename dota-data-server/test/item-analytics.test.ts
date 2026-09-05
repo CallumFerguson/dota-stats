@@ -5,6 +5,7 @@ import type { Client, Pool } from "pg";
 import { createDatabaseSchema } from "../src/database-schema.js";
 import { storeMatches, type DotaMatch, type DotaMatchPlayer } from "../src/match-storage.js";
 import { loadDatabaseSchemaDescription } from "../../dota-query-server/src/database-schema.js";
+import { loadEntityResolver } from "../../dota-query-server/src/entity-resolver.js";
 
 // Execute the application's SQL in an isolated, in-memory PostgreSQL engine.
 // No environment configuration, credentials, network, or developer DB is used.
@@ -37,6 +38,41 @@ describe("normalized item analytics (PostgreSQL)", () => {
   before(async () => { await createDatabaseSchema(database); });
   beforeEach(async () => { await postgres.exec("TRUNCATE matches CASCADE"); });
   after(async () => { await postgres.close(); });
+
+  it("seeds and resolves real reference names, canonical items, and ambiguous aliases", async () => {
+    const resolve = await loadEntityResolver(database as unknown as Pool, "public");
+    assert.deepEqual(resolve("what is battle fury's win rate on anti mage in turbo?").resolved.map((entity) => [entity.kind, entity.ids]),
+      [["item", [145]], ["hero", [1]], ["game_mode", [23]]]);
+    assert.deepEqual(resolve("BKB on AM in ranked All Pick").resolved.map((entity) => entity.ids),
+      [[116], [1], [7], [1, 22]]);
+    assert.deepEqual(resolve("Aghanim's Blessing").resolved[0].ids, [108]);
+    assert.deepEqual(resolve("ES").ambiguous[0].candidates.map((entity) => entity.name).sort(), ["Earth Spirit", "Earthshaker"]);
+    assert.deepEqual(resolve("Battle Fury Recipe").resolved[0].ids, [144]);
+  });
+
+  it("answers Battle Fury on Anti-Mage in Turbo with catalog-derived filters", async () => {
+    await storeMatches(database, [
+      match([player({ item_0: 145, item_1: 145 }), player({ player_slot: 128, backpack_0: 145 }),
+        player({ player_slot: 1, hero_id: 2, item_0: 145 }), player({ player_slot: 2 })], { game_mode: 23 }),
+      match([player({ item_0: 145 })], { match_id: 2, match_seq_num: 2, game_mode: 22 }),
+    ]);
+    const resolve = await loadEntityResolver(database as unknown as Pool, "public");
+    const { resolved } = resolve("battle fury's win rate on anti mage in turbo");
+    const id = (kind: string) => resolved.find((entity) => entity.kind === kind)!.ids[0];
+    const { rows } = await postgres.query<{ games: number; win_rate: string; hero_name: string; item_name: string }>(`
+      SELECT h.hero_name, pir.item_name, COUNT(*) AS games,
+        ROUND(100.0 * AVG(pir.won::int), 2) AS win_rate
+      FROM player_item_results pir LEFT JOIN heroes h USING (hero_id)
+      WHERE pir.item_id = $1 AND pir.hero_id = $2 AND pir.game_mode = $3
+        AND pir.won IS NOT NULL AND pir.start_time >= NOW() - INTERVAL '30 days'
+      GROUP BY h.hero_name, pir.item_name
+    `, [id("item"), id("hero"), id("game_mode")]);
+    assert.equal(rows.length, 1);
+    assert.equal(Number(rows[0].games), 2);
+    assert.equal(Number(rows[0].win_rate), 50);
+    assert.equal(rows[0].hero_name, "Anti-Mage");
+    assert.equal(rows[0].item_name, "Battle Fury");
+  });
 
   it("combines backpacks, duplicates, aliases, upgrades, and both neutral slots", async () => {
     await storeMatches(database, [match([player({
@@ -191,8 +227,14 @@ describe("normalized item analytics (PostgreSQL)", () => {
     assert.equal((await postgres.query(sql.replace("HAVING COUNT(*) >= 100", "HAVING COUNT(DISTINCT match_id) >= 100"))).rows.length, 0);
   });
 
-  it("can recreate views and seed the catalog without losing observations", async () => {
+  it("upgrades an existing schema and reseeds catalogs without losing observations", async () => {
     await storeMatches(database, [match([player({ item_0: 1 })])]);
+    // Simulate the previous schema in this isolated database.
+    await postgres.exec("ALTER TABLE items DROP COLUMN name_aliases; DROP TABLE heroes, game_modes, lobby_types");
+    await createDatabaseSchema(database);
+    assert.equal((await postgres.query("SELECT * FROM player_item_results")).rows.length, 1);
+    const resolve = await loadEntityResolver(database as unknown as Pool, "public");
+    assert.deepEqual(resolve("BKB on AM in turbo").resolved.map((entity) => entity.ids), [[116], [1], [23]]);
     await createDatabaseSchema(database);
     assert.equal((await postgres.query("SELECT * FROM player_item_results")).rows.length, 1);
   });

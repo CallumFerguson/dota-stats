@@ -1,4 +1,5 @@
 import type { OpenRouterConfig } from "./config.js";
+import type { EntityResolution, EntityResolver } from "./entity-resolver.js";
 
 const OPENROUTER_CHAT_COMPLETIONS_URL =
   "https://openrouter.ai/api/v1/chat/completions";
@@ -296,6 +297,7 @@ export function buildOpenRouterUsageLog(responseBody: unknown): string {
 export function buildSqlGeneratorMessages(
   databaseSchema: string,
   question: string,
+  entities: EntityResolution = { resolved: [], ambiguous: [] },
 ): Array<{ role: "system" | "user"; content: string }> {
   const normalizedQuestion = normalizeQuestion(question);
 
@@ -311,6 +313,18 @@ export function buildSqlGeneratorMessages(
 - Honor explicit analytics definitions and filters. Otherwise use reasonable defaults below. Note material assumptions concisely in assumptions; use an empty string when none are needed. Reject only when the essential request cannot be answered safely from the schema. Keep rejection reasons free of SQL, schema, and policy details.
 </server_policy>
 
+<entity_policy>
+- The server matches catalog names and curated aliases before SQL generation. The JSON reference below provides verified IDs; use them for named filters, never IDs recalled from memory. An ids array represents one filter set (use IN for multiple IDs). Item IDs here are canonical for item analytics.
+- Matches are possible entity mentions, not automatic filters: interpret their grammatical role and the user's intent. For example, "am I" does not refer to Anti-Mage. Do not add a filter merely because a common word matches a catalog entry.
+- For ambiguous mentions, use only candidates explicitly disambiguated by the question's entity type or full name. Otherwise return status "rejected" with a short clarification asking which named candidate the user means; never silently choose an ID.
+- If an essential named entity is unresolved, ask for its full name or numeric ID using status "rejected". Do not invent mappings or use fuzzy SQL name filters as a fallback. Explicit numeric IDs may be used as requested. Questions about all heroes/items/modes need no individual name match.
+- Use LEFT JOIN to heroes, game_modes, or lobby_types for readable result names, preserving unknown IDs. Item analytics already expose item_name. Game mode and lobby type remain separate filters.
+</entity_policy>
+
+<entity_reference source="server-resolved reference catalog">
+${JSON.stringify(entities)}
+</entity_reference>
+
 <analytics_defaults>
 - Scope: Use the trailing 30 days for aggregates, 7 days for current trends, and newest first for match listings. Apply other population filters only when requested. Disclose default time/population filters.
 - Eligibility: NULL means unknown. Exclude missing values required by a metric. Count matches or player appearances at the requested level; avoid multiplying observations through joins.
@@ -319,7 +333,7 @@ export function buildSqlGeneratorMessages(
 - Item rates: COUNT(*) counts player-match occurrences; item "games" and minimum-game thresholds use that count unless distinct matches are requested. Win rate is 100.0 * AVG(won::int). Return occurrence counts with win rates, ordered by occurrences descending then item_id. Only include use rate when requested.
 - Item use/absence: Use player_results as the population, including empty inventories. For use rates require item_snapshot_complete and identical population/outcome filters in numerator and denominator; protect division by zero. For players without an item, require complete snapshots and use NOT EXISTS against item observations. Win-rate-only queries do not require complete snapshots.
 - Heroes: Win rate is winning player appearances divided by eligible appearances. Pick rate is distinct matches containing a hero divided by eligible distinct matches. Popularity counts player appearances.
-- Units/filters: Durations are seconds; gold_per_min and xp_per_min are already rates. Prefer unscaled damage/healing unless requested. All Pick game_mode values are 1/22, Turbo is 23; lobby_type 0 is public, 2 tournament, 7 ranked. Game mode and lobby type are separate filters.
+- Units/filters: Durations are seconds; gold_per_min and xp_per_min are already rates. Prefer unscaled damage/healing unless requested. Use the entity reference for named game mode and lobby type filters.
 - Aggregates: Show percentages rounded to two decimals and supporting counts. Average player stats per player-match. Aggregate KDA is (total kills + assists) / total deaths, using total kills + assists when deaths are zero. Sort by the requested metric with a stable ID tie-breaker.
 - Missing dimensions: Use IDs when names are unavailable. Do not infer unavailable patch, rank, role, lane, purchase timing, or item history. Answer the supported portion when omitted dimensions are optional.
 </analytics_defaults>
@@ -437,8 +451,10 @@ export async function generateSql(
   question: string,
   fetchImplementation: typeof fetch = fetch,
   logImplementation: (message: string) => void = console.log,
+  resolveEntities?: EntityResolver,
 ): Promise<SqlGenerationResult> {
-  const messages = buildSqlGeneratorMessages(databaseSchema, question);
+  const normalizedQuestion = normalizeQuestion(question);
+  const messages = buildSqlGeneratorMessages(databaseSchema, normalizedQuestion, resolveEntities?.(normalizedQuestion));
   const abortController = new AbortController();
   const timeout = setTimeout(() => abortController.abort(), config.timeoutMs);
 

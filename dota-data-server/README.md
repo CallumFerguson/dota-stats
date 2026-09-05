@@ -58,6 +58,20 @@ do not establish who purchased an item or whether the upgrade was purchased,
 gifted, or otherwise granted. Sold items and ordinary consumed items are not
 reconstructed from the final snapshot.
 
+The data server also seeds `heroes`, `game_modes`, and `lobby_types` reference
+tables. Each contains its numeric ID, internal name, display name, and
+`name_aliases`; items gain the same alias array. Curated nicknames live in
+`src/reference-catalog.ts` and `src/item-catalog.ts`, keyed by internal names.
+Startup updates reference metadata transactionally alongside the item catalog.
+Existing databases receive the new tables and item alias column automatically;
+match rows are preserved. Unknown hero/mode/lobby IDs remain valid in match
+data, so use LEFT JOIN when adding names to query results.
+
+The query server loads these tables at startup to resolve names before SQL
+generation. Restart it after updating the catalogs, and grant its read-only role
+SELECT on the new tables. See [name resolution](../dota-query-server/README.md#name-resolution)
+for matching and ambiguity behavior.
+
 Names, IDs, and classifications come from the pinned
 [`dotaconstants` 10.8.0](https://github.com/odota/dotaconstants) package; startup
 does not download metadata. Categories are `regular`, `recipe`,

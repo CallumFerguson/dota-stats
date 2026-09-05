@@ -52,6 +52,43 @@ database role. Schema metadata and each user's question are sent to the
 configured OpenRouter model/provider, so configure OpenRouter's data handling
 to match your deployment requirements.
 
+## Name resolution
+
+At startup the server reads the `items`, `heroes`, `game_modes`, and
+`lobby_types` reference catalogs from `PGSCHEMA`, using its read-only database
+role. The ingestion server seeds these catalogs from pinned `dotaconstants`
+metadata and curated `name_aliases`. No metadata API call or new environment
+variable is required. Restart the query server after catalog changes.
+
+Before each model call, the resolver matches names and aliases without regard
+to case, spaces, hyphens, or possessive apostrophes. It matches whole words and
+prefers longer names, so `Battle Fury Recipe` does not become `Battle Fury`.
+Only the matched reference entries are added to the prompt, not the entire
+catalog. The model uses those IDs to construct filters and can join the catalogs
+to display readable names. Explicit numeric IDs are also supported.
+
+For `what is battle fury's win rate on anti mage in turbo?`, the reference is
+Battle Fury (`item_id = 145`), Anti-Mage (`hero_id = 1`), and Turbo
+(`game_mode = 23`). `AM`, `BKB`, and `bfury` are also recognized. Item forms
+resolve to the canonical ID used by `player_item_results`; for example,
+Aghanim's Blessing resolves to Scepter. All Pick resolves to modes 1 and 22,
+while the specific internal name `all_draft` resolves only to 22. Ranked is a
+lobby type, independent of game mode.
+
+The resolver does not guess typos or discard alias collisions. `ES` returns
+both Earthshaker and Earth Spirit as candidates. The model is instructed to
+ask for clarification through the existing rejection response when the request
+does not disambiguate an essential entity, and to ask for a full name or numeric
+ID for unresolved names. Grammatical interpretation still belongs to the model:
+an incidental phrase such as `am I` should not add an Anti-Mage filter. SQL
+validation enforces read-only execution; it does not prove semantic correctness.
+
+For an existing database, start the updated data server first; it adds the
+reference tables and the `items.name_aliases` column without rebuilding match
+data. Ensure the query role has SELECT on the new tables (see the grants above),
+then restart the query server. Missing or unreadable catalogs stop startup with
+a setup error instead of falling back to model-memorized IDs.
+
 ## Item queries
 
 The prompt prefers `player_item_results` for item statistics. This view already

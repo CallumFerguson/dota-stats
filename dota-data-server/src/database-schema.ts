@@ -1,5 +1,6 @@
 import type { Client } from "pg";
 import { ITEM_CATALOG, SEED_ITEM_CATALOG_SQL, UPGRADE_ITEM_IDS } from "./item-catalog.js";
+import { seedReferenceCatalogs } from "./reference-catalog.js";
 
 const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS matches (
@@ -93,6 +94,8 @@ CREATE TABLE IF NOT EXISTS match_player_items (
   CHECK (observed_held OR upgrade_reported IS TRUE)
 );
 
+ALTER TABLE items ADD COLUMN IF NOT EXISTS name_aliases TEXT[] NOT NULL DEFAULT '{}';
+
 CREATE INDEX IF NOT EXISTS match_player_items_item_idx
   ON match_player_items (item_id, match_id, player_slot);
 
@@ -180,6 +183,7 @@ export async function createDatabaseSchema(database: Client): Promise<void> {
   try {
     await database.query(CREATE_TABLES_SQL);
     await database.query(SEED_ITEM_CATALOG_SQL, [JSON.stringify(ITEM_CATALOG)]);
+    await seedReferenceCatalogs(database);
     await database.query("COMMIT");
   } catch (error) {
     await database.query("ROLLBACK");

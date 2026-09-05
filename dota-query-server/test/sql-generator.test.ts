@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { OpenRouterConfig } from "../src/config.js";
+import { createEntityResolver } from "../src/entity-resolver.js";
 import {
   buildSqlGeneratorMessages,
   buildOpenRouterUsageLog,
@@ -81,6 +82,25 @@ describe("buildSqlGeneratorMessages", () => {
 });
 
 describe("generateSql", () => {
+  it("sends verified catalog matches and ambiguity rules to the model", async () => {
+    const resolve = createEntityResolver([
+      { kind: "hero", id: 1, name: "Anti-Mage", names: ["AM"] },
+      { kind: "item", id: 145, name: "Battle Fury", names: ["BF"] },
+      { kind: "game_mode", id: 23, name: "Turbo", names: [] },
+    ]);
+    let prompt = "";
+    const fetchImplementation: typeof fetch = async (_input, init) => {
+      prompt = JSON.parse(String(init?.body)).messages[0].content;
+      return createOpenRouterResponse({ status: "query", sql: "SELECT 1", reason: "", assumptions: "" });
+    };
+    await generateSql(config, "schema", "battle fury's win rate on anti mage in turbo", fetchImplementation, () => undefined, resolve);
+    assert.match(prompt, /never IDs recalled from memory/);
+    assert.match(prompt, /never silently choose an ID/);
+    const reference = JSON.parse(prompt.match(/<entity_reference[^>]*>\n(.*?)\n<\/entity_reference>/s)![1]);
+    assert.deepEqual(reference.resolved.map((entry: { ids: number[] }) => entry.ids), [[145], [1], [23]]);
+    assert.doesNotMatch(prompt, /Turbo is 23|All Pick game_mode values/);
+  });
+
   it("requests strict structured output with configured model options", async () => {
     let requestUrl = "";
     let requestInit: RequestInit | undefined;

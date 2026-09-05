@@ -8,7 +8,7 @@
     "start": "tsx src/server.ts",
     "build": "tsc",
     "start:compiled": "node dist/server.js",
-    "test": "tsx --test test/config.test.ts test/database-schema.test.ts test/query-runner.test.ts test/sql-generator.test.ts"
+    "test": "tsx --test test/config.test.ts test/database-schema.test.ts test/entity-resolver.test.ts test/query-runner.test.ts test/sql-generator.test.ts"
   },
   "dependencies": {
     "dotenv": "^17.2.2",
